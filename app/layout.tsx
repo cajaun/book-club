@@ -12,7 +12,7 @@ import "@fontsource/jost/600.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Marginalia — Booksellers",
+  title: "GK Book Club",
   description: "A quiet shelf for well-loved books.",
 };
 

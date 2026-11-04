@@ -621,7 +621,7 @@ export function drawTitlePage(ctx: Ctx, w: number, h: number, book: Book, F: Fon
   ctx.fillRect(0, 0, w, h);
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#4a3a2a";
-  fitText(ctx, "MARGINALIA   CLASSICS", cx, h * 0.08, w * 0.7, 2.8 * u, (s) => `500 ${s}px ${F.sans}`, 0.25);
+  fitText(ctx, "GK   BOOK   CLUB", cx, h * 0.08, w * 0.7, 2.8 * u, (s) => `500 ${s}px ${F.sans}`, 0.25);
   ctx.fillStyle = red;
   ctx.fillRect(cx - 7 * u, h * 0.105, 14 * u, Math.max(1, u * 0.3));
   ctx.fillStyle = "#1f1712";
@@ -652,7 +652,7 @@ export function drawTitlePage(ctx: Ctx, w: number, h: number, book: Book, F: Fon
   ctx.arc(cx, h * 0.86, 3 * u, 0, Math.PI * 2);
   ctx.stroke();
   ctx.fillStyle = red;
-  fitText(ctx, "M", cx, h * 0.862, 5 * u, 3.4 * u, (s) => `600 ${s}px ${F.caps}`);
+  fitText(ctx, "GK", cx, h * 0.862, 5 * u, 2.6 * u, (s) => `600 ${s}px ${F.caps}`);
   ctx.fillStyle = "#4a3a2a";
   fitText(ctx, `FIRST PUBLISHED ${book.year < 0 ? -book.year + " BC" : book.year}`, cx, h * 0.915, w * 0.7, 2.2 * u, (s) => `600 ${s}px ${F.sans}`, 0.25);
   ctx.fillStyle = "#8a7a64";
@@ -678,7 +678,7 @@ export function drawEndpaper(ctx: Ctx, w: number, h: number, book: Book) {
 
 // ---------------------------------------------------------------- furniture
 
-export function drawWood(w: number, h: number, seed = "wood", base = "#4a2c1a") {
+export function drawWood(w: number, h: number, seed = "wood", base = "#5f3923") {
   const c = makeCanvas(w, h);
   const ctx = c.getContext("2d")!;
   ctx.fillStyle = base;
@@ -706,14 +706,14 @@ export function drawWood(w: number, h: number, seed = "wood", base = "#4a2c1a") 
 export function drawBackWall(w: number, h: number) {
   const c = makeCanvas(w, h);
   const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#0d1712";
+  ctx.fillStyle = "#0f1a14";
   ctx.fillRect(0, 0, w, h);
   const r = rng("wall");
   const plank = w / 16;
   for (let i = 0; i < 16; i++) {
-    ctx.fillStyle = `rgba(${10 + r() * 10},${24 + r() * 10},${18 + r() * 8},0.6)`;
+    ctx.fillStyle = `rgba(${12 + r() * 8},${26 + r() * 8},${19 + r() * 6},0.6)`;
     ctx.fillRect(i * plank, 0, plank, h);
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
     ctx.fillRect(i * plank, 0, 2, h);
     ctx.fillStyle = "rgba(90,120,100,0.06)";
     ctx.fillRect(i * plank + 2, 0, 1, h);

@@ -45,10 +45,10 @@ export default function Library() {
   const [handle, setHandle] = useState<{ id: string; pose: Pose } | null>(null);
   const [mode, setMode] = useState<Mode>("shelf");
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [lamp, setLamp] = useState(true);
-  const [bag, setBag] = useState<string[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // books that fit on the shelves at this screen size (null until known)
+  const [shelved, setShelved] = useState<Set<string> | null>(null);
 
   // ------------------------------------------------------------ engine lifecycle
   useEffect(() => {
@@ -67,6 +67,7 @@ export default function Library() {
           },
           onHeaderRect: setHeader,
           onBackend: setBackend,
+          onShelved: (ids) => setShelved(ids),
           onLost: () => setEpoch((e) => e + 1),
           getSlot: (m) => (m === "reader" ? readerSlot.current : detailSlot.current)?.getBoundingClientRect() ?? null,
         });
@@ -88,6 +89,13 @@ export default function Library() {
       engineRef.current = null;
     };
   }, [epoch]);
+
+  useEffect(() => {
+    import("@/lib/textures").then(({ drawWood }) => {
+      const url = drawWood(512, 256, "wood").toDataURL("image/jpeg", 0.82);
+      rootRef.current?.style.setProperty("--wood", `url(${url})`);
+    });
+  }, []);
 
   // return keyboard focus to the book that was opened
   useEffect(() => {
@@ -121,22 +129,31 @@ export default function Library() {
   }, []);
 
   const book = activeId ? BOOK_BY_ID[activeId] : null;
-  const inBag = book ? bag.includes(book.id) : false;
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return BOOKS.slice(0, 8);
-    return BOOKS.filter((b) => (b.title + " " + b.author).toLowerCase().includes(q)).slice(0, 12);
-  }, [query]);
+    const pool = shelved ? BOOKS.filter((b) => shelved.has(b.id)) : BOOKS;
+    if (!q) return pool.slice(0, 8);
+    return pool.filter((b) => (b.title + " " + b.author).toLowerCase().includes(q)).slice(0, 12);
+  }, [query, shelved]);
 
+  // The header rides on the bookcase's crown board. When you scroll down it
+  // follows the crown up, then sticks as a compact bar so search and the
+  // pose toggle stay reachable.
+  const stageW = rootRef.current?.clientWidth ?? header?.w ?? 0;
+  const compactH = stageW < 700 ? 62 : 72;
+  const hdrTop = header ? Math.max(header.y, compactH - header.h) : 0;
+  const visibleH = header ? hdrTop + header.h - Math.max(hdrTop, 0) : 0;
+  const stuck = header ? hdrTop > header.y + 0.5 : false;
   const headerStyle = header
     ? ({
         left: header.x,
-        top: header.y,
+        top: hdrTop,
         width: header.w,
         height: header.h,
-        "--hw": `${Math.min(header.w, 560)}px`,
+        "--hw": `${Math.min(header.w, stageW, 680)}px`,
+        "--vh": `${visibleH}px`,
         // when the case is wider than the screen, keep the controls on-screen
-        "--inset": `${Math.max(0, -header.x, header.x + header.w - (rootRef.current?.clientWidth ?? header.w))}px`,
+        "--inset": `${Math.max(0, -header.x, header.x + header.w - stageW)}px`,
       } as React.CSSProperties)
     : { display: "none" };
 
@@ -149,25 +166,16 @@ export default function Library() {
         <canvas ref={heroRef} className="hero-canvas" aria-hidden />
 
         {/* crown: logo, or the pose control while a book is in hand */}
-        <header className={`crown ${handle && mode === "shelf" ? "is-handling" : ""}`} style={headerStyle}>
+        <header className={`crown ${handle && mode === "shelf" ? "is-handling" : ""} ${stuck ? "is-stuck" : ""}`} style={headerStyle}>
+          <div className="crown-inner">
           <div className="crown-logo">
             <button className="brass" aria-label="Search the shelves" onClick={() => setSearchOpen(true)}>
               <SearchIcon />
             </button>
-            <button className={`brass ${lamp ? "" : "is-off"}`} aria-label={lamp ? "Dim the lamp" : "Light the lamp"} aria-pressed={lamp} onClick={() => {
-              setLamp(!lamp);
-              engineRef.current?.setLamp(!lamp);
-            }}>
-              <LampIcon />
-            </button>
             <div className="wordmark">
-              <h1>Marginalia</h1>
-              <p>Booksellers · Est. 1921</p>
+              <h1>GK Book Club</h1>
             </div>
-            <button className="brass bag" aria-label={`Bag, ${bag.length} items`}>
-              <BagIcon />
-              {bag.length > 0 && <span className="bag-count">{bag.length}</span>}
-            </button>
+            <span className="brass-spacer" aria-hidden />
           </div>
           <div className="crown-pose" aria-hidden={!handle}>
             <div className="segmented" role="radiogroup" aria-label="How the book sits">
@@ -185,6 +193,7 @@ export default function Library() {
               ))}
             </div>
             <p className="hint">{handle ? HINT[handle.pose] : ""}</p>
+          </div>
           </div>
         </header>
 
@@ -212,18 +221,6 @@ export default function Library() {
                   {formatYear(book.year)} · {book.pages} pages · Collector&rsquo;s edition
                 </p>
                 <p className="blurb">{book.blurb}</p>
-                <div className="actions">
-                  <button
-                    className="pill solid"
-                    tabIndex={mode === "detail" ? 0 : -1}
-                    onClick={() => !inBag && setBag((b) => [...b, book.id])}
-                  >
-                    {inBag ? "In your bag ✓" : `Add to bag — $${book.price.toFixed(2)}`}
-                  </button>
-                  <button className="pill ghost" tabIndex={mode === "detail" ? 0 : -1} onClick={() => engineRef.current?.openReader()}>
-                    Read a page
-                  </button>
-                </div>
               </div>
             )}
           </div>
@@ -275,7 +272,7 @@ export default function Library() {
           <section key={name}>
             <h3>{`${ROMAN[s]} · ${name}`}</h3>
             <ul>
-              {BOOKS.filter((b) => b.shelf === s).map((b) => (
+              {BOOKS.filter((b) => b.shelf === s && (!shelved || shelved.has(b.id))).map((b) => (
                 <li key={b.id}>
                   <button
                     id={`book-${b.id}`}
@@ -299,7 +296,7 @@ function Fallback({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     
     <div className="fallback">
-      <h1>Marginalia</h1>
+      <h1>GK Book Club</h1>
       {SHELVES.map((name, s) => (
         <section key={name}>
           <h2>{`${ROMAN[s]} · ${name}`}</h2>
@@ -321,22 +318,6 @@ function SearchIcon() {
     <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
       <circle cx="10.5" cy="10.5" r="6" />
       <path d="M15 15l5 5" />
-    </svg>
-  );
-}
-function LampIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v3M5 14h14l-3-7H8z" />
-      <path d="M9.5 17.5a2.5 2.5 0 005 0" />
-    </svg>
-  );
-}
-function BagIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
-      <path d="M5 9h14l-1 11H6z" />
-      <path d="M9 9V7a3 3 0 016 0v2" strokeLinecap="round" />
     </svg>
   );
 }

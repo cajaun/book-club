@@ -62,11 +62,22 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 3px; }
 
 .crown {
   position: absolute; z-index: 1;
-  --u: calc(var(--hw) / 100);
+  --u: min(calc(var(--hw) / 100), calc(var(--vh, 999px) / 19));
   font-size: calc(var(--u) * 3);
   transition: opacity .4s ease;
 }
 .mode-detail .crown, .mode-reader .crown { opacity: 0; pointer-events: none; }
+.crown-inner {
+  position: absolute; left: 0; right: 0; bottom: 0; height: var(--vh, 100%);
+  transition: box-shadow .25s ease;
+}
+.crown.is-stuck .crown-inner {
+  background:
+    linear-gradient(180deg, rgba(255, 220, 170, .10), rgba(0, 0, 0, .18)),
+    var(--wood, #6e4429) center / 512px auto;
+  box-shadow: 0 1px 0 rgba(255, 220, 160, .12) inset, 0 6px 18px rgba(0, 0, 0, .45);
+  border-bottom: 1px solid rgba(20, 10, 4, .6);
+}
 .crown-logo, .crown-pose {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -97,7 +108,7 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 3px; }
 }
 .brass:active { transform: scale(.93); }
 .brass.is-off { filter: saturate(.4) brightness(.7); }
-.brass.bag { margin-left: calc(var(--u) * 10.8); }
+.brass-spacer { flex: none; width: calc(var(--u) * 8.2); }
 .bag-count {
   position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px;
   border-radius: 8px; background: #a3262a; color: #fff; font: 600 10px/16px var(--sans);

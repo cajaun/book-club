@@ -51,8 +51,13 @@ export const SHELVES = [
   "History & Letters",
   "Tales & Fables",
   "Myth & Legend",
+  "Modern Classics",
+  "American Voices",
+  "Sea & Travel",
+  "Philosophy & Wisdom",
+  "Children's Classics",
 ];
-export const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+export const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV"];
 /** Shelves per bookcase bay. */
 export const ROWS_PER_BAY = 5;
 
@@ -272,26 +277,129 @@ const CATALOGUE: Row[][] = [
     ["The Shahnameh", "Ferdowsi", 1010, 896, "Fifty thousand couplets of Persian kings and heroes, from the creation to the Arab conquest."],
     ["The Mabinogion", "Anonymous", 1350, 288, "Welsh tales of enchanted hounds, a woman made of flowers and the hero Pwyll."],
   ],
+  [
+    ["The Great Gatsby", "F. Scott Fitzgerald", 1925, 192, "A self-made millionaire throws parties across the bay from the green light he cannot reach."],
+    ["Mrs Dalloway", "Virginia Woolf", 1925, 224, "One June day in London, a society hostess buys the flowers herself."],
+    ["To the Lighthouse", "Virginia Woolf", 1927, 240, "A family's summers on Skye, a trip to the lighthouse postponed for ten years."],
+    ["Orlando", "Virginia Woolf", 1928, 336, "A young nobleman lives for three hundred years and wakes one morning a woman."],
+    ["A Passage to India", "E. M. Forster", 1924, 368, "Something happened in the Marabar Caves, and no one in Chandrapore will agree what."],
+    ["Howards End", "E. M. Forster", 1910, 352, "Only connect: two sisters, a business family and a house in Hertfordshire."],
+    ["The Sun Also Rises", "Ernest Hemingway", 1926, 256, "A lost generation drinks its way from Paris to the bullfights in Pamplona."],
+    ["The Magic Mountain", "Thomas Mann", 1924, 720, "A young engineer visits his cousin at a Swiss sanatorium and stays for seven years."],
+    ["Siddhartha", "Hermann Hesse", 1922, 160, "A Brahmin's son leaves home in search of enlightenment and finds a river."],
+    ["Of Human Bondage", "W. Somerset Maugham", 1915, 688, "An orphan with a club foot struggles towards art, medicine and an unworthy love."],
+    ["The Good Soldier", "Ford Madox Ford", 1915, 256, "This is the saddest story I have ever heard, says a narrator who missed everything."],
+    ["Sons and Lovers", "D. H. Lawrence", 1913, 512, "A miner's son is torn between his mother and the women who love him."],
+    ["Women in Love", "D. H. Lawrence", 1920, 592, "Two sisters in a Midlands mining town and the two men they choose."],
+    ["Swann's Way", "Marcel Proust", 1913, 464, "A madeleine dipped in tea, and a whole childhood comes flooding back."],
+    ["The Trial", "Franz Kafka", 1925, 256, "Someone must have slandered Josef K., for one morning he was arrested."],
+    ["My Ántonia", "Willa Cather", 1918, 288, "A Bohemian immigrant girl and the Nebraska prairie that shaped them both."],
+    ["O Pioneers!", "Willa Cather", 1913, 192, "Alexandra Bergson tames a Nebraska farm that broke her father."],
+    ["Ethan Frome", "Edith Wharton", 1911, 128, "A sled, a winter night and a farmer trapped between duty and longing."],
+    ["The Beautiful and Damned", "F. Scott Fitzgerald", 1922, 432, "A golden couple waits for an inheritance and slowly spends themselves."],
+  ],
+  [
+    ["Adventures of Huckleberry Finn", "Mark Twain", 1884, 368, "A boy and a runaway slave float down the Mississippi on a raft, towards freedom."],
+    ["The Adventures of Tom Sawyer", "Mark Twain", 1876, 272, "Whitewashed fences, a cave, a treasure and a murder on the river."],
+    ["The Scarlet Letter", "Nathaniel Hawthorne", 1850, 272, "In Puritan Boston, a woman wears an embroidered A and keeps a name to herself."],
+    ["The House of the Seven Gables", "Nathaniel Hawthorne", 1851, 336, "A curse on a New England family and the gloomy house that carries it."],
+    ["Uncle Tom's Cabin", "Harriet Beecher Stowe", 1852, 640, "The novel that, Lincoln is said to have joked, started a great war."],
+    ["The Red Badge of Courage", "Stephen Crane", 1895, 160, "A young Union soldier runs from his first battle and must find his way back."],
+    ["Sister Carrie", "Theodore Dreiser", 1900, 576, "A country girl comes to Chicago and rises as the man who loves her falls."],
+    ["The Jungle", "Upton Sinclair", 1906, 416, "A Lithuanian family in the Chicago stockyards, and what goes into the sausages."],
+    ["McTeague", "Frank Norris", 1899, 432, "A San Francisco dentist, a lottery ticket and a marriage gone to greed."],
+    ["A Connecticut Yankee in King Arthur's Court", "Mark Twain", 1889, 352, "A factory foreman wakes up in Camelot and starts improving things."],
+    ["Billy Budd", "Herman Melville", 1924, 144, "A handsome young sailor, a master-at-arms who hates him, and the law of the sea."],
+    ["The Rise of Silas Lapham", "William Dean Howells", 1885, 384, "A self-made paint millionaire tries to buy his way into Boston society."],
+    ["Washington Square", "Henry James", 1880, 224, "A plain heiress, a charming suitor and a father certain he is after the money."],
+    ["The Country of the Pointed Firs", "Sarah Orne Jewett", 1896, 160, "A summer in a fishing village on the coast of Maine."],
+    ["Pudd'nhead Wilson", "Mark Twain", 1894, 224, "Two babies switched in their cradles, and a lawyer with a collection of fingerprints."],
+    ["Herland", "Charlotte Perkins Gilman", 1915, 160, "Three explorers stumble on a country of women who have done perfectly well without men."],
+    ["Main Street", "Sinclair Lewis", 1920, 464, "A city librarian marries a small-town doctor and tries to improve Gopher Prairie."],
+    ["Babbitt", "Sinclair Lewis", 1922, 400, "A realtor in the city of Zenith begins to suspect there is more to life."],
+  ],
+  [
+    ["Two Years Before the Mast", "Richard Henry Dana Jr.", 1840, 432, "A Harvard student signs on as a common sailor around Cape Horn to California."],
+    ["Typee", "Herman Melville", 1846, 320, "A deserting sailor lives among islanders in a Marquesan valley, and wonders if he can leave."],
+    ["The Sea-Wolf", "Jack London", 1904, 368, "A literary critic is fished out of the sea by a captain who rules his ship by force."],
+    ["Captains Courageous", "Rudyard Kipling", 1897, 224, "A spoiled rich boy falls off a liner and is raised by a Grand Banks fishing crew."],
+    ["The Innocents Abroad", "Mark Twain", 1869, 528, "Twain joins a pleasure cruise to Europe and the Holy Land and is not impressed."],
+    ["Life on the Mississippi", "Mark Twain", 1883, 432, "Twain's years learning to pilot a steamboat on the great river."],
+    ["Roughing It", "Mark Twain", 1872, 592, "Silver mines, stagecoaches and Hawaii: Twain's young years in the West."],
+    ["Travels with a Donkey", "Robert Louis Stevenson", 1879, 160, "Twelve days walking the Cévennes with an obstinate donkey called Modestine."],
+    ["The Oregon Trail", "Francis Parkman", 1849, 384, "A young Bostonian rides west with the emigrants and the Oglala Sioux."],
+    ["Journey to the Center of the Earth", "Jules Verne", 1864, 256, "A professor, his nephew and a guide climb down an Icelandic volcano."],
+    ["From the Earth to the Moon", "Jules Verne", 1865, 224, "A Baltimore gun club decides to fire a cannon at the moon, with passengers."],
+    ["The Mysterious Island", "Jules Verne", 1875, 544, "Five castaways escape by balloon and build a civilisation on an uncharted island."],
+    ["The Riddle of the Sands", "Erskine Childers", 1903, 336, "Two young Englishmen sailing the Frisian islands stumble on an invasion plan."],
+    ["Typhoon", "Joseph Conrad", 1902, 112, "A stolid captain steers straight into the storm because the book says to."],
+    ["Moonfleet", "J. Meade Falkner", 1898, 288, "A Dorset boy, a smugglers' vault and a diamond hidden in a dead man's locket."],
+    ["Kim", "Rudyard Kipling", 1901, 368, "An Irish orphan on the streets of Lahore becomes a lama's disciple and a spy."],
+    ["The Man Who Would Be King", "Rudyard Kipling", 1888, 96, "Two adventurers set out to make themselves kings of Kafiristan."],
+    ["Eothen", "Alexander Kinglake", 1844, 288, "A young Englishman's witty journey through the Ottoman East."],
+  ],
+  [
+    ["The Analects", "Confucius", -475, 224, "Sayings of the Master on learning, ritual and how to be a good person."],
+    ["Tao Te Ching", "Laozi", -400, 128, "Eighty-one short chapters on the way that cannot be named."],
+    ["The Art of War", "Sun Tzu", -500, 112, "The supreme art of war is to subdue the enemy without fighting."],
+    ["The Bhagavad Gita", "Vyasa", -200, 176, "On the eve of battle, a prince hesitates, and his charioteer turns out to be a god."],
+    ["The Dhammapada", "The Buddha", -250, 128, "The Buddha's teachings gathered into four hundred and twenty-three verses."],
+    ["Nicomachean Ethics", "Aristotle", -340, 336, "What is the good life? Aristotle's answer: virtue, practised, among friends."],
+    ["The Trial and Death of Socrates", "Plato", -399, 96, "Socrates defends himself before Athens, refuses to escape, and drinks the hemlock."],
+    ["Enchiridion", "Epictetus", 125, 64, "Some things are in our control and others not: a freed slave's handbook for living."],
+    ["Letters from a Stoic", "Seneca", 65, 256, "A Roman statesman's letters to a friend on time, death and how to live well."],
+    ["Utopia", "Thomas More", 1516, 160, "A traveller describes an island where everything is held in common."],
+    ["Candide", "Voltaire", 1759, 144, "A young optimist is assured that all is for the best, and then everything happens to him."],
+    ["Pensées", "Blaise Pascal", 1670, 384, "The heart has its reasons which reason knows nothing of."],
+    ["Discourse on Method", "René Descartes", 1637, 96, "I think, therefore I am: doubting everything to find one sure thing."],
+    ["The Essays of Montaigne", "Michel de Montaigne", 1580, 1344, "A retired magistrate writes about everything, and invents the essay to do it."],
+    ["Thus Spoke Zarathustra", "Friedrich Nietzsche", 1883, 352, "A prophet comes down from the mountain to announce the death of God."],
+    ["Fear and Trembling", "Søren Kierkegaard", 1843, 160, "Abraham, Isaac and the leap of faith, examined by a writer under a pseudonym."],
+    ["Critique of Pure Reason", "Immanuel Kant", 1781, 784, "What can we know? Kant draws the boundaries of reason itself."],
+    ["An Essay Concerning Human Understanding", "John Locke", 1689, 752, "The mind begins as a blank slate, and experience writes on it."],
+  ],
+  [
+    ["The Secret Garden", "Frances Hodgson Burnett", 1911, 288, "A sour orphan finds the key to a locked garden on a Yorkshire estate."],
+    ["A Little Princess", "Frances Hodgson Burnett", 1905, 256, "A rich girl at a London boarding school loses everything except her imagination."],
+    ["Anne of Green Gables", "L. M. Montgomery", 1908, 320, "An elderly brother and sister send for an orphan boy and get Anne, with an e."],
+    ["Heidi", "Johanna Spyri", 1881, 304, "A little girl is sent to live with her grandfather high in the Swiss Alps."],
+    ["Pinocchio", "Carlo Collodi", 1883, 192, "A wooden puppet runs away from the carpenter who made him, and his nose grows."],
+    ["The Velveteen Rabbit", "Margery Williams", 1922, 48, "A stuffed rabbit learns what it means to become Real."],
+    ["The Tale of Peter Rabbit", "Beatrix Potter", 1902, 64, "A disobedient rabbit squeezes under the gate into Mr. McGregor's garden."],
+    ["Five Children and It", "E. Nesbit", 1902, 224, "Five children dig up a grumpy sand-fairy who grants one wish a day."],
+    ["The Railway Children", "E. Nesbit", 1906, 256, "Three children move to the country and wave at the trains, hoping for their father."],
+    ["The Princess and the Goblin", "George MacDonald", 1872, 240, "A princess, a miner's boy and the goblins tunnelling beneath the castle."],
+    ["At the Back of the North Wind", "George MacDonald", 1871, 368, "A coachman's son is carried through the night by the North Wind."],
+    ["Pollyanna", "Eleanor H. Porter", 1913, 256, "An orphan plays the glad game in her stern aunt's house, and the town catches it."],
+    ["Rebecca of Sunnybrook Farm", "Kate Douglas Wiggin", 1903, 320, "A lively girl from a poor family goes to live with her two strict aunts."],
+    ["The Water-Babies", "Charles Kingsley", 1863, 288, "A young chimney sweep falls into a river and becomes a water-baby."],
+    ["Through the Looking-Glass", "Lewis Carroll", 1871, 224, "Alice climbs through the mirror into a land laid out like a chessboard."],
+    ["The Story of Doctor Dolittle", "Hugh Lofting", 1920, 176, "A country doctor learns to talk to animals and sails to Africa to cure the monkeys."],
+    ["Winnie-the-Pooh", "A. A. Milne", 1926, 176, "A bear of very little brain and his friends in the Hundred Acre Wood."],
+    ["Hans Brinker", "Mary Mapes Dodge", 1865, 336, "A poor Dutch boy dreams of winning the silver skates."],
+    ["Black Arrow", "Robert Louis Stevenson", 1888, 288, "An outlaw band in the Wars of the Roses, signing their deeds with a black arrow."],
+  ],
 ];
 
-// curated board colours (base, ink)
+// curated board colours (base, ink, accent), sampled to match the reference:
+// mostly deep cloth colours, with the odd cream paperback for contrast
 const PALETTE: [string, string, string][] = [
-  ["#7c1f1c", "#e8cf8a", "#d8b46a"], // oxblood
-  ["#1f3b2e", "#e5cf8d", "#c9a95d"], // forest
-  ["#1c2740", "#e6d29a", "#c7a560"], // navy
-  ["#c9952e", "#2b1d12", "#7a1f18"], // mustard
-  ["#e9dfc6", "#2a2018", "#b4382d"], // cream
-  ["#93a37c", "#21281a", "#6d2a20"], // sage
-  ["#d6684a", "#fbefd9", "#3a2018"], // terracotta
-  ["#17130f", "#d8b46a", "#a33a2c"], // black
-  ["#4a2141", "#e6cf93", "#c49c58"], // plum
-  ["#1f5653", "#efdca5", "#d0aa5c"], // teal
-  ["#b8463c", "#f4e6c8", "#2b1810"], // brick
-  ["#e7c9c0", "#4a1d1d", "#b03a36"], // rose
-  ["#2c2c2a", "#e9d9ae", "#b9934c"], // charcoal
-  ["#5d6b3c", "#f0e2b4", "#c8a35a"], // olive
-  ["#a8b9a2", "#1d2a24", "#7b2b23"], // celadon
-  ["#efe8d6", "#1d2338", "#2f4a7a"], // ivory/blue
+  ["#6a1a1c", "#e3c98a", "#cfae68"], // oxblood
+  ["#7d2320", "#ecd9a8", "#d6b46a"], // crimson
+  ["#22412f", "#e2cc8e", "#c6a65e"], // bottle green
+  ["#2e4a32", "#ead8a4", "#c9a95d"], // forest
+  ["#1d2840", "#e3cf98", "#c4a35e"], // navy
+  ["#273352", "#e8d6a6", "#c9a862"], // ink blue
+  ["#b5862c", "#2a1b10", "#6e1d16"], // mustard
+  ["#1b4846", "#ebd9a2", "#cda85a"], // teal
+  ["#181512", "#d6b46a", "#a33a2c"], // black
+  ["#3d1d38", "#e3cc90", "#c29a56"], // plum
+  ["#5b6532", "#efe0b2", "#c8a35a"], // olive
+  ["#a9502e", "#f3e3c4", "#2e1a10"], // terracotta
+  ["#8f9a72", "#1f271b", "#6b2a20"], // sage
+  ["#2b2a28", "#e6d6aa", "#b8924b"], // charcoal
+  ["#e2d9c0", "#2a2018", "#a8352b"], // cream
+  ["#8a2f2a", "#f0e2c2", "#2b1810"], // brick
 ];
 
 const FEATURED: Record<string, Partial<Book>> = {
@@ -331,7 +439,7 @@ export function rng(seed: string) {
   };
 }
 
-const SPINES: SpineStyle[] = ["cloth", "paper", "label", "ribbed", "pattern", "cloth", "label", "paper"];
+const SPINES: SpineStyle[] = ["cloth", "label", "cloth", "ribbed", "paper", "cloth", "label", "pattern", "cloth", "ribbed"];
 const COVERS: CoverStyle[] = ["frame", "emblem", "arch", "panel", "dots", "stripes", "waves", "sunburst", "emblem", "panel"];
 
 export const BOOKS: Book[] = [];
@@ -366,6 +474,7 @@ CATALOGUE.forEach((rows, shelf) => {
     };
     if (FEATURED[id]?.h && !FEATURED[id]?.d) book.d = Math.round(book.h * 0.68 * 10) / 10;
     if (id === "dracula") book.price = 38;
+    if (BOOK_BY_ID[id]) throw new Error(`duplicate book id: ${id}`);
     BOOKS.push(book);
     BOOK_BY_ID[id] = book;
   });
@@ -446,6 +555,22 @@ for (let shelf = INITIAL_SHELVES.length; shelf < SHELVES.length; shelf++) {
     row.push({ kind: "book", id, pose: "spine" });
   });
   INITIAL_SHELVES.push(row);
+}
+
+/**
+ * The five rows of the bookcase. Each row holds three genres in sequence
+ * (row r: genres r, r+5, r+10); a phone shows the first, wider screens more.
+ */
+export function initialRows(): Entry[][] {
+  const clone = (e: Entry): Entry => (e.kind === "stack" ? { ...e, ids: [...e.ids] } : { ...e });
+  return Array.from({ length: ROWS_PER_BAY }, (_, r) => {
+    const row: Entry[] = [];
+    for (let g = r; g < INITIAL_SHELVES.length; g += ROWS_PER_BAY) {
+      if (row.length) row.push({ kind: "space", w: 10 });
+      row.push(...INITIAL_SHELVES[g].map(clone));
+    }
+    return row;
+  });
 }
 
 export function formatYear(y: number) {

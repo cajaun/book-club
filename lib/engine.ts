@@ -7,8 +7,22 @@
 // WebGL2 fallback everywhere else (append ?webgl to force the fallback).
 
 import * as THREE from "three/webgpu";
-import { BOOKS, BOOK_BY_ID, INITIAL_SHELVES, ROMAN, SHELVES, type Entry, type Pose } from "./books";
-import { CASE, freeSpace, interiorTop, layoutAll, layoutShelf, poseQuat, surfaceY, type Target } from "./layout";
+import { BOOKS, BOOK_BY_ID, ROMAN, SHELVES, initialRows, type Entry, type Pose } from "./books";
+import {
+  CASE,
+  baySegs,
+  caseBounds,
+  fitFrame,
+  frame,
+  idsOf,
+  interiorTop,
+  layoutAll,
+  layoutRow,
+  poseQuat,
+  setFrame,
+  surfaceY,
+  type Target,
+} from "./layout";
 import {
   buildAtlas,
   drawBack,
@@ -32,6 +46,8 @@ export interface EngineCallbacks {
   onMode(mode: Mode, id: string | null): void;
   onHeaderRect(r: { x: number; y: number; w: number; h: number }): void;
   onBackend(name: string): void;
+  /** Which books are on the shelves at this screen size. */
+  onShelved(ids: Set<string>): void;
   onLost(): void;
   getSlot(mode: Mode): DOMRect | null;
 }
@@ -45,6 +61,8 @@ interface BookState {
   tPos: THREE.Vector3;
   tQuat: THREE.Quaternion;
   follow: boolean; // dragged: track the pointer tightly
+  offShelf: boolean; // doesn't fit on this screen's shelves
+  inHand: boolean; // shown as the close-up instead
   // choreographed move (pose change / drop): pull clear of the shelf, turn, set down
   tw: { from: THREE.Vector3; fromQ: THREE.Quaternion; t: number; dur: number; zc: number; yc: number } | null;
 }
@@ -104,10 +122,11 @@ function clearZ(id: string) {
 // One light rig, used by both the shelf and the hero scene, so a book looks
 // identical on the shelf and in the reader's hands.
 const LIGHT = {
-  on: { hemi: 2.15, key: 3.0, fill: 1.15, keyColor: 0xffe6c0 },
-  off: { hemi: 0.7, key: 0.8, fill: 0.35, keyColor: 0xa9bcdc },
-  sky: 0xfff3e2,
-  ground: 0x4a3626,
+  // (Lambert: a face receives (key·cosθ + hemi·~0.5 + fill) / π)
+  on: { hemi: 1.7, key: 1.55, fill: 0.75, keyColor: 0xfff0dc },
+  off: { hemi: 0.6, key: 0.5, fill: 0.25, keyColor: 0xa9bcdc },
+  sky: 0xfff4e6,
+  ground: 0x3a2a1e,
   keyPos: new THREE.Vector3(70, 170, 460),
   fillPos: new THREE.Vector3(-60, 80, 400),
 };
@@ -118,11 +137,12 @@ export class LibraryEngine {
   private scene = new THREE.Scene();
   private heroScene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(20, 1, 10, 3000);
-  private atlas!: Atlas;
-  private bookMat!: THREE.MeshLambertMaterial;
+
+  private bookMats: THREE.MeshLambertMaterial[] = [];
   private books = new Map<string, BookState>();
   private meshes: THREE.Mesh[] = [];
-  private shelves: Entry[][] = INITIAL_SHELVES.map((s) => s.map((e) => (e.kind === "stack" ? { ...e, ids: [...e.ids] } : { ...e })));
+  // five rows; each row's entries run left to right across all bays
+  private shelves: Entry[][] = initialRows();
   private ray = new THREE.Raycaster();
   private key!: THREE.DirectionalLight;
   private hemi!: THREE.HemisphereLight;
@@ -193,8 +213,11 @@ export class LibraryEngine {
     this.cb.onBackend(backend);
     if (/[?&]debug\b/.test(location.search)) (window as unknown as { __shelf: unknown }).__shelf = this;
 
+    {
+      const r = this.root.getBoundingClientRect();
+      setFrame(fitFrame(r.width / Math.max(1, r.height)));
+    }
     this.buildFurniture();
-    this.buildBooks();
     this.buildLights();
     this.buildHeroLights();
     this.relayout(true);
@@ -236,10 +259,12 @@ export class LibraryEngine {
     const r = new THREE.WebGPURenderer({ canvas, antialias: true, alpha: true, forceWebGL });
     await r.init();
     r.setClearColor(0x000000, 0);
-    // neutral tone mapping keeps cream pages and gold foil from clipping at
-    // the brighter exposure, without shifting the palette
+    // Lights are balanced so a book facing you shows its own colours at about
+    // 0.9x (deep, like the reference); Khronos Neutral tone mapping is ~identity
+    // there and only rolls off the brightest cream. Both canvases share it, so
+    // a book looks the same on the shelf and in the hand.
     r.toneMapping = THREE.NeutralToneMapping;
-    r.toneMappingExposure = 1.3;
+    r.toneMappingExposure = 1.0;
     r.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     (r as unknown as { onDeviceLost: () => void }).onDeviceLost = () => this.cb.onLost();
     canvas.addEventListener("webglcontextlost", () => this.cb.onLost());
@@ -256,105 +281,187 @@ export class LibraryEngine {
     return t;
   }
 
-  private buildFurniture() {
-    const woodC = drawWood(1024, 512, "wood");
-    const woodH = this.canvasTex(woodC);
-    woodH.wrapS = woodH.wrapT = THREE.RepeatWrapping;
-    const woodV = woodH.clone();
-    woodV.center.set(0.5, 0.5);
-    woodV.rotation = Math.PI / 2;
-    woodV.needsUpdate = true;
-    const wood = new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.62, color: 0xffffff });
-    const woodSide = new THREE.MeshStandardMaterial({ map: woodV, roughness: 0.62 });
-    const woodDark = new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.7, color: 0x9a8070 });
+  private furniture = new THREE.Group();
+  private furnMats: {
+    wood: THREE.Material;
+    side: THREE.Material;
+    sideWorld: THREE.Material;
+    dark: THREE.Material;
+    wall: THREE.Material;
+    floor: THREE.Material;
+    plaques: THREE.Material[];
+  } | null = null;
 
-    const { W, board, depth, side, crown, plinth } = CASE;
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[], x: number, y: number, z: number, shadow = true) => {
+  /** Bays side by side on wide screens (edge to edge), stacked on tall ones. */
+  /** (Re)build the case for the current frame. Materials are made once. */
+  private plaques: THREE.Mesh[][] = [];
+  private buildFurniture() {
+    if (!this.furnMats) {
+      const woodH = this.canvasTex(drawWood(1024, 512, "wood"));
+      woodH.wrapS = woodH.wrapT = THREE.RepeatWrapping;
+      const woodV = woodH.clone();
+      woodV.center.set(0.5, 0.5);
+      woodV.rotation = Math.PI / 2;
+      woodV.needsUpdate = true;
+      this.furnMats = {
+        wood: new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.8 }),
+        side: new THREE.MeshStandardMaterial({ map: woodV, roughness: 0.8 }),
+        sideWorld: new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.8 }),
+        dark: new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.85, color: 0x8a7464 }),
+        wall: new THREE.MeshStandardMaterial({ map: this.canvasTex(drawBackWall(1024, 2048)), roughness: 0.95 }),
+        floor: new THREE.MeshStandardMaterial({ color: 0x0a0705, roughness: 1 }),
+        plaques: SHELVES.map(
+          (name, i) =>
+            new THREE.MeshStandardMaterial({
+              map: this.canvasTex(drawPlaque(`${ROMAN[i]}  ·  ${name.toUpperCase()}`, this.fonts, 2)),
+              roughness: 0.6,
+              transparent: true,
+            }),
+        ),
+      };
+    }
+    const M = this.furnMats;
+    this.furniture.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+    this.scene.remove(this.furniture);
+    this.furniture = new THREE.Group();
+    this.scene.add(this.furniture);
+
+    const { board, depth, side, plinth, cornice } = CASE;
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, shadow = true) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
       m.castShadow = shadow;
       m.receiveShadow = true;
-      this.scene.add(m);
+      this.furniture.add(m);
       return m;
     };
+    const F = frame();
+    const B = caseBounds();
+    const caseW = B.right - B.left;
+    const segs = baySegs();
 
-    // shelf boards (one under each compartment)
-    for (let i = 0; i < CASE.shelves; i++) {
-      add(new THREE.BoxGeometry(W, board, depth + 1), wood, 0, surfaceY(i) - board / 2, -depth / 2 + 0.5);
-    }
-    const topY = interiorTop;
-    add(new THREE.BoxGeometry(W, board, depth + 1), woodDark, 0, topY + board / 2, -depth / 2 + 0.5);
-
-    // sides
-    const totalTop = topY + board + crown;
-    const totalBot = -board - plinth;
-    const sideH = totalTop - totalBot;
-    for (const s of [-1, 1]) {
-      add(new THREE.BoxGeometry(side, sideH, depth + 3), woodSide, s * (W / 2 + side / 2), totalBot + sideH / 2, -depth / 2 + 1.5);
-    }
-    // crown (the header board) + cornice
-    add(new THREE.BoxGeometry(W + side * 2, crown, depth + 3), wood, 0, topY + board + crown / 2, -depth / 2 + 1.5);
-    add(new THREE.BoxGeometry(W + side * 2 + 5, 2.4, depth + 6), woodDark, 0, totalTop + 1.2, -depth / 2 + 2);
-    add(new THREE.BoxGeometry(W, 1.6, 1.6), woodDark, 0, topY + board + 0.8, 1.2);
-    // plinth
-    add(new THREE.BoxGeometry(W + side * 2 + 2, plinth, depth + 4), woodDark, 0, totalBot + plinth / 2, -depth / 2 + 2);
-
-    // back wall
-    const wallTex = this.canvasTex(drawBackWall(1024, 2048));
-    const wall = new THREE.Mesh(
-      new THREE.PlaneGeometry(W, topY),
-      new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.95 }),
-    );
-    wall.position.set(0, topY / 2, -depth);
-    wall.receiveShadow = true;
-    this.scene.add(wall);
-
-    // brass shelf plaques
-    SHELVES.forEach((name, i) => {
-      const tex = this.canvasTex(drawPlaque(`${ROMAN[i]}  ·  ${name.toUpperCase()}`, this.fonts, 2));
-      const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.6, metalness: 0, color: 0x9c8b74, transparent: true });
-      const p = new THREE.Mesh(new THREE.PlaneGeometry(30, 30 * (56 / 512)), mat);
-      p.position.set(0, surfaceY(i) - board / 2, 1.12);
-      this.scene.add(p);
+    this.plaques = [];
+    for (let r = 0; r < CASE.shelves; r++) this.plaques.push([]);
+    segs.forEach((g) => {
+      for (let r = 0; r < CASE.shelves; r++) {
+        add(new THREE.BoxGeometry(F.bayW, board, depth + 1), M.wood, g.cx, surfaceY(r) - board / 2, -depth / 2 + 0.5);
+        // brass plaque on the board's front edge; its genre is set by relayout()
+        const p = new THREE.Mesh(new THREE.PlaneGeometry(30, 30 * (56 / 512)), M.plaques[r]);
+        p.position.set(g.cx, surfaceY(r) - board / 2, 1.12);
+        this.furniture.add(p);
+        this.plaques[r].push(p);
+      }
+      add(new THREE.BoxGeometry(F.bayW, board, depth + 1), M.dark, g.cx, interiorTop + board / 2, -depth / 2 + 0.5);
+      const wall = new THREE.Mesh(new THREE.PlaneGeometry(F.bayW, interiorTop), M.wall);
+      wall.position.set(g.cx, interiorTop / 2, -depth);
+      wall.receiveShadow = true;
+      this.furniture.add(wall);
     });
-
-    // floor shadow catcher in front of the case (desktop shows the room)
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(600, 300),
-      new THREE.MeshStandardMaterial({ color: 0x040302, roughness: 1 }),
-    );
+    // side panels and dividers
+    const sideH = B.crownBottom - B.bot;
+    for (let k = 0; k <= F.bays; k++) {
+      const x = B.left + side / 2 + k * (F.bayW + side);
+      const pos = new THREE.Vector3(x, B.bot + sideH / 2, -depth / 2 + 1.5);
+      add(worldWoodUV(new THREE.BoxGeometry(side, sideH, depth + 3), pos), M.sideWorld, pos.x, pos.y, pos.z);
+    }
+    // crown (the header board), cornice, moulding, plinth
+    add(new THREE.BoxGeometry(caseW, F.crown, depth + 3), M.wood, 0, B.crownBottom + F.crown / 2, -depth / 2 + 1.5);
+    add(new THREE.BoxGeometry(caseW + 5, cornice, depth + 6), M.dark, 0, B.top - cornice / 2, -depth / 2 + 2);
+    add(new THREE.BoxGeometry(caseW - side * 2, 1.6, 1.6), M.dark, 0, B.crownBottom + 0.8, 1.2);
+    add(new THREE.BoxGeometry(caseW + 2, plinth, depth + 4), M.dark, 0, B.bot + plinth / 2, -depth / 2 + 2);
+    // Desktop: the case's side panels simply carry on to both screen edges
+    // as plain wood (same material, same depth), as do crown, cornice and plinth.
+    if (F.roomW && F.roomW > caseW + 1) {
+      const over = 20; // run past the screen edge so no seam ever shows
+      const wingW = (F.roomW - caseW) / 2 + over;
+      for (const dir of [-1, 1]) {
+        const cx = dir * (caseW / 2 + wingW / 2);
+        const pos = new THREE.Vector3(cx, B.bot + sideH / 2, -depth / 2 + 1.5);
+        add(worldWoodUV(new THREE.BoxGeometry(wingW, sideH, depth + 3), pos), M.sideWorld, pos.x, pos.y, pos.z);
+        add(new THREE.BoxGeometry(wingW, F.crown, depth + 3), M.wood, cx, B.crownBottom + F.crown / 2, -depth / 2 + 1.5);
+        add(new THREE.BoxGeometry(wingW, cornice, depth + 6), M.dark, cx, B.top - cornice / 2, -depth / 2 + 2);
+        add(new THREE.BoxGeometry(wingW, plinth, depth + 4), M.dark, cx, B.bot + plinth / 2, -depth / 2 + 2);
+      }
+    }
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(caseW + 600, 300), M.floor);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, totalBot, 100);
+    floor.position.set(0, B.bot, 100);
     floor.receiveShadow = true;
-    this.scene.add(floor);
+    this.furniture.add(floor);
+
+    if (this.key) this.aimKey();
+    this.dirty = true;
   }
 
-  private buildBooks() {
-    this.atlas = buildAtlas(BOOKS, this.fonts, 4096);
-    const tex = this.canvasTex(this.atlas.canvas, false);
-    // Diffuse-only (no view-dependent sheen): a book must look the same on the
-    // shelf and in the hand, whatever angle it is seen from.
-    this.bookMat = new THREE.MeshLambertMaterial({ map: tex });
-    for (const b of BOOKS) {
-      const geo = bookGeometry(b.id, this.atlas);
-      const mesh = new THREE.Mesh(geo, this.bookMat);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.userData.id = b.id;
-      this.scene.add(mesh);
-      this.meshes.push(mesh);
-      this.books.set(b.id, {
-        id: b.id,
-        mesh,
-        pos: new THREE.Vector3(),
-        vel: new THREE.Vector3(),
-        quat: new THREE.Quaternion(),
-        tPos: new THREE.Vector3(),
-        tQuat: new THREE.Quaternion(),
-        follow: false,
-        tw: null,
-      });
+  private aimKey() {
+    const B = this.bounds();
+    const center = new THREE.Vector3((B.left + B.right) / 2, (B.top + B.bot) / 2, -CASE.depth / 2);
+    // same direction as designed for a single bay (lamp high, front-right)
+    const dir = LIGHT.keyPos.clone().sub(new THREE.Vector3(0, interiorTop / 2, -CASE.depth / 2));
+    this.key.target.position.copy(center);
+    this.key.position.copy(center).add(dir);
+    const sc = this.key.shadow.camera as THREE.OrthographicCamera;
+    const hw = (B.right - B.left) / 2 + 24;
+    const hh = (B.top - B.bot) / 2 + 30;
+    sc.left = -hw;
+    sc.right = hw;
+    sc.top = hh;
+    sc.bottom = -hh;
+    sc.updateProjectionMatrix();
+    const size = Math.max(hw, hh) > 160 ? 4096 : 2048;
+    if (this.key.shadow.mapSize.x !== size) {
+      this.key.shadow.mapSize.set(size, size);
+      this.key.shadow.map?.dispose();
+      (this.key.shadow as unknown as { map: unknown }).map = null;
     }
+    this.key.shadow.needsUpdate = true;
+  }
+
+  /**
+   * Book meshes + atlas pages, built on demand: a phone only shows the first
+   * genre of each row, so it never pays for the other pages' textures.
+   */
+  private pagesBuilt = new Set<number>();
+  private ensureBooks(ids: Iterable<string>) {
+    const perPage = CASE.shelves;
+    const need = new Set<number>();
+    for (const id of ids) if (!this.books.has(id)) need.add(Math.floor(BOOK_BY_ID[id].shelf / perPage));
+    for (const page of need) {
+      if (this.pagesBuilt.has(page)) continue;
+      this.pagesBuilt.add(page);
+      const list = BOOKS.filter((b) => Math.floor(b.shelf / perPage) === page);
+      const atlas = buildAtlas(list, this.fonts, 4096);
+      // Diffuse-only (no view-dependent sheen): a book must look the same on
+      // the shelf and in the hand, whatever angle it is seen from.
+      const mat = new THREE.MeshLambertMaterial({ map: this.canvasTex(atlas.canvas, false) });
+      this.bookMats.push(mat);
+      for (const b of list) {
+        const mesh = new THREE.Mesh(bookGeometry(b.id, atlas), mat);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData.id = b.id;
+        mesh.visible = false;
+        this.scene.add(mesh);
+        this.meshes.push(mesh);
+        this.books.set(b.id, {
+          id: b.id,
+          mesh,
+          pos: new THREE.Vector3(),
+          vel: new THREE.Vector3(),
+          quat: new THREE.Quaternion(),
+          tPos: new THREE.Vector3(),
+          tQuat: new THREE.Quaternion(),
+          follow: false,
+          offShelf: true,
+          inHand: false,
+          tw: null,
+        });
+      }
+    }
+  }
+
+  private syncVisible(s: BookState) {
+    s.mesh.visible = !s.offShelf && !s.inHand;
   }
 
   private buildLights() {
@@ -362,7 +469,7 @@ export class LibraryEngine {
     this.scene.add(this.hemi);
     const key = new THREE.DirectionalLight(LIGHT.on.keyColor, LIGHT.on.key);
     key.position.copy(LIGHT.keyPos);
-    key.target.position.set(0, interiorTop / 2, -CASE.depth / 2);
+    key.target.position.set(0, interiorTop / 2, -CASE.depth / 2); // re-aimed in aimKey()
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
     const sc = key.shadow.camera as THREE.OrthographicCamera;
@@ -377,6 +484,7 @@ export class LibraryEngine {
     key.shadow.radius = 3;
     this.scene.add(key, key.target);
     this.key = key;
+    this.aimKey();
     this.fill = new THREE.DirectionalLight(0xfff2e0, LIGHT.on.fill);
     this.fill.position.copy(LIGHT.fillPos);
     this.scene.add(this.fill);
@@ -411,16 +519,46 @@ export class LibraryEngine {
 
   private relayout(snap = false) {
     const ph = this.drag && this.drag.target.stack === undefined ? { shelf: this.drag.target.shelf, index: this.drag.target.index, entry: this.drag.entry } : undefined;
-    const { targets } = layoutAll(this.shelves, ph);
+    const { targets, spans, hidden } = layoutAll(this.shelves, ph);
+    this.ensureBooks(targets.keys());
     targets.forEach((t: Target, id) => {
       const s = this.books.get(id)!;
       s.tPos.copy(t.pos);
       s.tQuat.copy(t.quat);
-      if (snap) {
+      // first appearance (or coming back on-shelf): place it, don't fly it in
+      if (snap || s.offShelf) {
         s.pos.copy(t.pos);
         s.quat.copy(t.quat);
+        s.vel.set(0, 0, 0);
+        s.tw = null;
+        s.mesh.position.copy(t.pos);
+        s.mesh.quaternion.copy(t.quat);
       }
+      s.offShelf = false;
+      this.syncVisible(s);
     });
+    for (const id of hidden) {
+      const s = this.books.get(id);
+      if (s && !s.follow) {
+        s.offShelf = true;
+        this.syncVisible(s);
+      }
+    }
+    // each bay's plaque names the genre of the first book in it
+    spans.forEach((row, r) => {
+      const seen = new Set<number>();
+      for (const sp of row) {
+        if (sp.hidden || sp.bay < 0 || seen.has(sp.bay) || sp.index < 0) continue;
+        const e = this.shelves[r][sp.index];
+        const ids = e ? idsOf(e) : [];
+        if (!ids.length) continue;
+        seen.add(sp.bay);
+        const p = this.plaques[r]?.[sp.bay];
+        if (p) p.material = this.furnMats!.plaques[BOOK_BY_ID[ids[0]].shelf];
+      }
+      this.plaques[r]?.forEach((p, b) => (p.visible = seen.has(b)));
+    });
+    this.cb.onShelved(new Set(targets.keys()));
     this.dirty = true;
   }
 
@@ -506,62 +644,76 @@ export class LibraryEngine {
 
   private resize() {
     const r = this.root.getBoundingClientRect();
-    this.size = { w: Math.max(1, r.width), h: Math.max(1, r.height) };
-    this.shelfR.setSize(this.size.w, this.size.h, false);
-    this.heroR.setSize(this.size.w, this.size.h, false);
+    const w = Math.max(1, Math.round(r.width));
+    const h = Math.max(1, Math.round(r.height));
+    const changed = w !== this.size.w || h !== this.size.h;
+    this.size = { w, h };
+    // Resizing a canvas wipes it. Only do it when the size really changed, and
+    // redraw in the same task so there is never a blank frame (mobile browser
+    // toolbars sliding in and out fire resize events constantly).
+    if (changed) {
+      this.shelfR.setSize(w, h, false);
+      this.heroR.setSize(w, h, false);
+    }
     this.camera.aspect = this.size.w / this.size.h;
+    const f = fitFrame(this.size.w / this.size.h);
+    const cur = frame();
+    if (changed && this.mode === "shelf" && !this.drag && (f.bays !== cur.bays || Math.abs(f.bayW - cur.bayW) > 0.5 || Math.abs(f.crown - cur.crown) > 0.5)) {
+      setFrame(f);
+      this.buildFurniture();
+      this.relayout(); // books glide to their new places
+      this.view = null;
+    }
     if (!this.view) this.view = this.defaultView();
     this.applyView();
-    this.heroDirty = true;
+    if (changed) {
+      this.shelfR.render(this.scene, this.camera);
+      this.heroR.render(this.heroScene, this.camera);
+      this.dirty = false;
+    }
   }
 
-  // The case is ~2.4 m tall. Fitting all of it on screen makes spines
-  // unreadable, so the camera frames a readable part and you pan around it,
-  // like scrolling a page (drag / swipe / wheel; pinch or ctrl+wheel to zoom).
+  // The case is sized to the screen (see fitFrame), so the camera simply
+  // frames all of it: five shelves, edge to edge, no scrolling or zooming.
   private view: { cx: number; cy: number; viewH: number } | null = null;
 
   private bounds() {
-    const top = interiorTop + CASE.board + CASE.crown + 2.4;
-    const bot = -CASE.board - CASE.plinth;
-    const half = CASE.W / 2 + CASE.side;
-    return { top, bot, left: -half, right: half };
+    return caseBounds();
   }
 
-  /** Visible height (cm) that fits the whole case: the zoom-out limit. */
-  private fitH() {
+  /** Visible height (cm) at the case front that shows the whole case. */
+  private framedH() {
     const B = this.bounds();
     const aspect = this.size.w / this.size.h;
-    return Math.max(B.top - B.bot + 4, (B.right - B.left + 4) / aspect);
+    return Math.max(B.top - B.bot, (B.right - B.left) / aspect);
   }
 
   private defaultView() {
     const B = this.bounds();
-    const aspect = this.size.w / this.size.h;
-    // phones: ~84 cm across (spines clearly legible, slight side crop like the
-    // reference); larger screens: ~7.5 px per cm
-    const target = this.size.w < 700 ? 84 / aspect : Math.max(95, this.size.h / 7.5);
-    const viewH = Math.min(this.fitH(), target);
+    const viewH = this.framedH();
     return { cx: 0, cy: B.top - viewH / 2, viewH };
   }
 
   private clampView() {
     const v = this.view!;
     const B = this.bounds();
-    v.viewH = THREE.MathUtils.clamp(v.viewH, 55, this.fitH());
+    v.viewH = this.framedH();
+    v.cx = 0;
     const hh = v.viewH / 2;
-    const hw = hh * (this.size.w / this.size.h);
-    const m = 2; // a sliver of room around the case
-    v.cx = 2 * hw >= B.right - B.left + 2 * m ? 0 : THREE.MathUtils.clamp(v.cx, B.left - m + hw, B.right + m - hw);
-    v.cy = 2 * hh >= B.top - B.bot + 2 * m ? (B.top + B.bot) / 2 : THREE.MathUtils.clamp(v.cy, B.bot - m + hh, B.top + m - hh);
+    // anchored to the top; any spare height (very tall phones) falls below
+    v.cy = B.top - hh;
   }
 
   private applyView() {
     this.clampView();
     const v = this.view!;
     const fov = this.camera.fov * (Math.PI / 180);
+    // frame the plane of the case's front edge (z = 1.5) so its sides sit
+    // exactly on the screen edges
+    const front = 1.5;
     const dist = v.viewH / 2 / Math.tan(fov / 2);
-    this.camera.position.set(v.cx, v.cy, dist);
-    this.camera.lookAt(v.cx, v.cy, 0);
+    this.camera.position.set(v.cx, v.cy, front + dist);
+    this.camera.lookAt(v.cx, v.cy, front);
     this.camera.near = 5;
     this.camera.far = dist + 400;
     this.camera.updateProjectionMatrix();
@@ -569,7 +721,7 @@ export class LibraryEngine {
     // tell the DOM where the crown board is so the header sits on it
     const B = this.bounds();
     const a = this.project(new THREE.Vector3(B.left, B.top - 2.4, 1.5));
-    const b = this.project(new THREE.Vector3(B.right, interiorTop + CASE.board, 1.5));
+    const b = this.project(new THREE.Vector3(B.right, B.crownBottom, 1.5));
     this.cb.onHeaderRect({ x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y });
     this.dirty = true;
   }
@@ -578,25 +730,11 @@ export class LibraryEngine {
   private pan(dx: number, dy: number) {
     if (!this.view) return;
     const k = this.view.viewH / this.size.h;
-    this.view.cx -= dx * k;
+    void dx; // width is locked edge to edge
     this.view.cy += dy * k;
     this.applyView();
   }
 
-  /** Zoom about a screen point, keeping what is under it in place. */
-  private zoomAt(f: number, px: number, py: number) {
-    const v = this.view;
-    if (!v) return;
-    const aspect = this.size.w / this.size.h;
-    const nx = (px / this.size.w) * 2 - 1;
-    const ny = -((py / this.size.h) * 2 - 1);
-    const wx = v.cx + (nx * v.viewH * aspect) / 2;
-    const wy = v.cy + (ny * v.viewH) / 2;
-    v.viewH = THREE.MathUtils.clamp(v.viewH / f, 55, this.fitH());
-    v.cx = wx - (nx * v.viewH * aspect) / 2;
-    v.cy = wy - (ny * v.viewH) / 2;
-    this.applyView();
-  }
 
   private project(v: THREE.Vector3) {
     const p = v.clone().project(this.camera);
@@ -623,7 +761,6 @@ export class LibraryEngine {
   // ------------------------------------------------------------------ pointer
 
   private ptrs = new Map<number, { x: number; y: number }>();
-  private pinch: { d: number; mx: number; my: number } | null = null;
   private fling = { x: 0, y: 0 };
   private lastPtr: { x: number; y: number } | null = null;
 
@@ -632,10 +769,6 @@ export class LibraryEngine {
     const local = (e: { clientX: number; clientY: number }) => {
       const r = el.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
-    };
-    const pinchState = () => {
-      const [a, b] = [...this.ptrs.values()];
-      return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
     };
     el.addEventListener("pointerdown", (e) => {
       if (this.mode !== "shelf" || this.busy || e.button !== 0) return;
@@ -646,11 +779,10 @@ export class LibraryEngine {
       el.setPointerCapture(e.pointerId);
       this.fling = { x: 0, y: 0 };
       if (this.ptrs.size === 2) {
-        // second finger: pinch-zoom, abandon any tap / pick-up in progress
+        // a second finger cancels any tap / pick-up in progress (no zoom)
         if (this.down?.timer) clearTimeout(this.down.timer);
         if (this.down?.active) this.endDrag();
         this.down = null;
-        this.pinch = pinchState();
         return;
       }
       if (this.ptrs.size > 2) return;
@@ -672,13 +804,7 @@ export class LibraryEngine {
     el.addEventListener("pointermove", (e) => {
       const p = local(e);
       if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, p);
-      if (this.pinch && this.ptrs.size >= 2) {
-        const n = pinchState();
-        this.pan(n.mx - this.pinch.mx, n.my - this.pinch.my);
-        this.zoomAt(n.d / Math.max(1, this.pinch.d), n.mx, n.my);
-        this.pinch = n;
-        return;
-      }
+      if (this.ptrs.size >= 2) return;
       const d = this.down;
       if (d && d.pointerId === e.pointerId) {
         this.lastPtr = p;
@@ -709,10 +835,6 @@ export class LibraryEngine {
     const up = (e: PointerEvent, cancelled = false) => {
       this.ptrs.delete(e.pointerId);
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-      if (this.pinch) {
-        if (this.ptrs.size < 2) this.pinch = null;
-        return;
-      }
       const d = this.down;
       if (!d || d.pointerId !== e.pointerId) return;
       if (d.timer) clearTimeout(d.timer);
@@ -746,26 +868,19 @@ export class LibraryEngine {
     el.addEventListener("pointerleave", () => {
       if (!this.down) this.setHover(null);
     });
-    // wheel / trackpad: scroll the shelf; ctrl+wheel (trackpad pinch) zooms
+    // wheel / trackpad: scroll the shelf vertically
     el.addEventListener(
       "wheel",
       (e) => {
         if (this.mode !== "shelf" || this.busy) return;
         e.preventDefault();
         const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.size.h : 1;
-        if (e.ctrlKey) {
-          const p = local(e);
-          this.zoomAt(Math.exp(-e.deltaY * unit * 0.01), p.x, p.y);
-        } else this.pan(-e.deltaX * unit, -e.deltaY * unit);
+        if (!e.ctrlKey) this.pan(0, -e.deltaY * unit); // ctrl+wheel (page zoom) is swallowed
       },
       { passive: false },
     );
   }
 
-  /** Keyboard / button zoom (+1 in, -1 out). */
-  zoomBy(dir: 1 | -1) {
-    this.zoomAt(dir > 0 ? 1.25 : 0.8, this.size.w / 2, this.size.h / 2);
-  }
 
   setHover(id: string | null) {
     if (this.hover === id) return;
@@ -817,31 +932,25 @@ export class LibraryEngine {
     if (!dr) return;
     const s = this.books.get(dr.id)!;
     const p = this.pointOnPlane(cx, cy, clearZ(dr.id));
-    const bx = THREE.MathUtils.clamp(p.x + dr.offset.x, -CASE.W / 2 + 2, CASE.W / 2 - 2);
-    const by = THREE.MathUtils.clamp(p.y + dr.offset.y, -2, interiorTop + 4);
+    const B = this.bounds();
+    const bx = THREE.MathUtils.clamp(p.x + dr.offset.x, B.left + CASE.side + 2, B.right - CASE.side - 2);
+    const by = THREE.MathUtils.clamp(p.y + dr.offset.y, -2, B.crownBottom);
     dr.vx = THREE.MathUtils.lerp(dr.vx, p.x - dr.lastX, 0.35);
     dr.lastX = p.x;
 
     // which shelf / where in it
     let shelf = 0;
     let best = Infinity;
-    for (let i = 0; i < CASE.shelves; i++) {
-      const mid = surfaceY(i) + CASE.compH / 2;
-      const dd = Math.abs(by - mid);
+    for (let i = 0; i < this.shelves.length; i++) {
+      const dd = Math.abs(by - (surfaceY(i) + CASE.compH / 2));
       if (dd < best) {
         best = dd;
         shelf = i;
       }
     }
-    // a full shelf won't take another book: keep the last shelf that had room
-    if (shelf !== dr.target.shelf && dr.entry.kind !== "stack" && freeSpace(this.shelves[shelf], dr.entry) < 0) shelf = dr.target.shelf;
-    if (shelf !== dr.target.shelf && dr.entry.kind === "stack" && freeSpace(this.shelves[shelf], dr.entry) < 0) {
-      // a flat book can still go onto an existing stack, so only block if no stack is under the pointer
-      const hasStack = this.shelves[shelf].some((e) => e.kind === "stack");
-      if (!hasStack) shelf = dr.target.shelf;
-    }
+    // (a full row just pushes its last book off the end, like a real shelf)
     const tmp = new Map<string, Target>();
-    const spans = layoutShelf(this.shelves[shelf], shelf, tmp);
+    const spans = layoutRow(this.shelves[shelf], shelf, tmp, new Set());
     let index = this.shelves[shelf].length;
     let stack: number | undefined;
     for (const sp of spans) {
@@ -930,13 +1039,14 @@ export class LibraryEngine {
   open(id: string) {
     if (this.mode !== "shelf" || this.busy) return;
     const s = this.books.get(id);
-    if (!s) return;
+    if (!s || s.offShelf) return;
     this.setHover(null);
     if (!this.snapReady) this.takeSnap(); // only if tapped before the shelf ever settled
     const hero = this.makeHero(id);
     hero.group.position.copy(s.pos);
     hero.group.quaternion.copy(s.quat);
-    s.mesh.visible = false;
+    s.inHand = true;
+    this.syncVisible(s);
     this.snapshot(true);
     this.hero = hero;
     this.mode = "detail";
@@ -969,19 +1079,31 @@ export class LibraryEngine {
     this.mode = "shelf";
     this.snapshot(false);
     this.cb.onMode("shelf", null);
+    // Fly back to a point just in front of the slot, already square to it.
+    // There the shelf's own copy of the book takes over and slides home in the
+    // shelf scene, so the landing is continuous (its shadow grows in as it
+    // goes) instead of the close-up vanishing and the shelf copy popping in.
+    const out = this.poseOf(id) === "flat" ? 14 : 18;
+    const front = () => s.tPos.clone().add(new THREE.Vector3(0, 0, out));
     hero.tween = {
       from: { pos: hero.group.position.clone(), quat: hero.group.quaternion.clone() },
-      to: () => ({ pos: s.tPos, quat: s.tQuat }),
+      to: () => ({ pos: front(), quat: s.tQuat }),
       t: 0,
-      dur: this.reduced ? 0.25 : 0.7,
+      dur: this.reduced ? 0.2 : 0.55,
       lw: [hero.lw, 0],
       pullStart: 0,
-      pullEnd: this.poseOf(id) === "flat" ? 16 : 22,
+      pullEnd: 6,
       done: () => {
-        s.pos.copy(s.tPos);
+        const f = front();
+        s.pos.copy(f);
         s.quat.copy(s.tQuat);
         s.vel.set(0, 0, 0);
-        s.mesh.visible = true;
+        // run only the final "slide straight in" phase (~0.25 s)
+        s.tw = { from: f.clone(), fromQ: s.tQuat.clone(), t: PH_IN, dur: this.reduced ? 0.4 : 0.9, zc: f.z, yc: -Infinity };
+        s.mesh.position.copy(f);
+        s.mesh.quaternion.copy(s.tQuat);
+        s.inHand = false;
+        this.syncVisible(s);
         this.removeHero(hero);
         this.hero = null;
         this.busy = false;
@@ -1001,10 +1123,13 @@ export class LibraryEngine {
         else if (e.kind === "stack") order.push(...e.ids.slice().reverse());
       }),
     );
-    const i = order.indexOf(this.hero.id);
-    const nextId = order[(i + dir + order.length) % order.length];
+    const onShelf = order.filter((id) => id === this.hero!.id || (this.books.get(id) && !this.books.get(id)!.offShelf));
+    const i = onShelf.indexOf(this.hero.id);
+    const nextId = onShelf[(i + dir + onShelf.length) % onShelf.length];
     const old = this.hero;
-    this.books.get(old.id)!.mesh.visible = true;
+    const oldS = this.books.get(old.id)!;
+    oldS.inHand = false;
+    this.syncVisible(oldS);
     this.dirty = true;
     old.leaving = true;
     const off = new THREE.Vector3(-dir * this.viewWidthAt(old.group.position) * 0.9, 0, 0);
@@ -1030,7 +1155,9 @@ export class LibraryEngine {
     const target = this.heroTarget("detail", nextId);
     hero.group.position.copy(target.pos).sub(off);
     hero.group.quaternion.copy(new THREE.Quaternion().setFromAxisAngle(UP, dir * 0.6).multiply(target.quat));
-    this.books.get(nextId)!.mesh.visible = false;
+    const nextS = this.books.get(nextId)!;
+    nextS.inHand = true;
+    this.syncVisible(nextS);
     hero.tween = {
       from: { pos: hero.group.position.clone(), quat: hero.group.quaternion.clone() },
       to: () => this.heroTarget("detail", nextId),
@@ -1443,10 +1570,34 @@ export class LibraryEngine {
       const m = o as THREE.Mesh;
       m.geometry?.dispose();
     });
-    this.bookMat?.map?.dispose();
+    this.bookMats.forEach((m) => m.map?.dispose());
     this.shelfR?.dispose();
     this.heroR?.dispose();
   }
+}
+
+/**
+ * Map wood by real-world size instead of stretching the texture over each
+ * box, so a 5 cm side panel and a 1 m wall show the same grain, and it runs
+ * continuously from one into the other. Grain runs vertically.
+ */
+function worldWoodUV(g: THREE.BufferGeometry, at: THREE.Vector3, along = 140, across = 70) {
+  const p = g.getAttribute("position");
+  const n = g.getAttribute("normal");
+  const uv = g.getAttribute("uv");
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i) + at.x,
+      y = p.getY(i) + at.y,
+      z = p.getZ(i) + at.z;
+    const ax = Math.abs(n.getX(i)),
+      ay = Math.abs(n.getY(i));
+    // texture u runs along the grain (vertical), v across it
+    if (ay > 0.5) uv.setXY(i, z / along, x / across); // top / bottom
+    else if (ax > 0.5) uv.setXY(i, y / along, z / across); // left / right faces
+    else uv.setXY(i, y / along, x / across); // front / back
+  }
+  uv.needsUpdate = true;
+  return g;
 }
 
 // ---------------------------------------------------------------- book geometry
