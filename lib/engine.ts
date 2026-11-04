@@ -1101,7 +1101,7 @@ export class LibraryEngine {
     // There the shelf's own copy of the book takes over and slides home in the
     // shelf scene, so the landing is continuous (its shadow grows in as it
     // goes) instead of the close-up vanishing and the shelf copy popping in.
-    const out = this.poseOf(id) === "flat" ? 14 : 18;
+    const out = this.poseOf(id) === "flat" ? 7 : 9;
     const front = () => s.tPos.clone().add(new THREE.Vector3(0, 0, out));
     hero.tween = {
       from: { pos: hero.group.position.clone(), quat: hero.group.quaternion.clone() },
@@ -1251,7 +1251,9 @@ export class LibraryEngine {
     if (hit) return hit;
     const b = BOOK_BY_ID[id];
     const board = 0.28;
-    const over = 0.3;
+    // page block flush with the boards: the close-up must have exactly the
+    // shelf copy's silhouette (an inset block showed the endpapers at the edge)
+    const over = 0;
     const cover = makeCanvas(b.d * D, b.h * D);
     drawCover(cover.getContext("2d")!, 0, 0, cover.width, cover.height, b, this.fonts);
     const spine = makeCanvas(Math.max(8, b.t * D), b.h * D);
@@ -1274,7 +1276,9 @@ export class LibraryEngine {
   private makeHero(id: string): Hero {
     const b = BOOK_BY_ID[id];
     const board = 0.28;
-    const over = 0.3;
+    // page block flush with the boards: the close-up must have exactly the
+    // shelf copy's silhouette (an inset block showed the endpapers at the edge)
+    const over = 0;
     const tex: THREE.Texture[] = [];
     const geos: THREE.BufferGeometry[] = [];
     const mats: THREE.Material[] = [];
