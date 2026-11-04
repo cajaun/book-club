@@ -21,6 +21,7 @@ import {
   interiorTop,
   layoutAll,
   layoutRow,
+  resolveRow,
   poseQuat,
   setFrame,
   surfaceY,
@@ -699,9 +700,13 @@ export class LibraryEngine {
     const b = BOOK_BY_ID[id];
     const zc = clearZ(id);
     const loc = this.locate(id);
-    // while turning, keep the lowest corner above the shelf surface
+    // A real turn (spine -> flat, flat -> face-out ...) is done held above the
+    // shelf so no corner dips below it. A book that's only being moved — e.g. a
+    // laid-flat book carried to another spot or onto a stack — doesn't turn,
+    // so it isn't lifted: it goes straight to its spot.
+    const turning = s.quat.angleTo(s.tQuat) > 0.7;
     const floor = loc ? surfaceY(loc.shelf) : s.tPos.y - b.h / 2;
-    const yc = floor + Math.max(b.h, b.d) / 2 + 0.6;
+    const yc = turning ? floor + Math.max(b.h, b.d) / 2 + 0.6 : -Infinity;
     // already held clear (a drop)? skip the "pull out" phase
     const t0 = s.pos.z >= zc - 0.5 ? PH_OUT : 0;
     s.tw = { from: s.pos.clone(), fromQ: s.quat.clone(), t: t0, dur, zc, yc };
@@ -1074,7 +1079,23 @@ export class LibraryEngine {
         if (bx > sp.x0 + inset && bx < sp.x1 - inset) stack = sp.index;
       }
     }
-    const x = rowX(bx) - entryWidth(dr.entry) / 2;
+    // Where it lands. If the shelf under the pointer has no room for it, it
+    // goes to the nearest shelf that does (below first, then above) instead
+    // of pushing a book off the end.
+    let x = rowX(bx) - entryWidth(dr.entry) / 2;
+    if (stack === undefined) {
+      const order = [shelf];
+      for (let r = shelf + 1; r < this.shelves.length; r++) order.push(r);
+      for (let r = shelf - 1; r >= 0; r--) order.push(r);
+      for (const r of order) {
+        const fx = this.findSpot(r, dr.entry, x);
+        if (fx !== null) {
+          shelf = r;
+          x = fx;
+          break;
+        }
+      }
+    }
     const t = dr.target;
     if (t.shelf !== shelf || Math.abs(t.x - x) > 0.05 || t.stack !== stack) {
       dr.target = { shelf, x, stack };
@@ -1091,6 +1112,27 @@ export class LibraryEngine {
     s.tPos.set(bx, by, clearZ(dr.id));
     s.tQuat.copy(q);
     this.dirty = true;
+  }
+
+  /** Would `entry` placed at row-x `x` on row `r` fit without anything leaving the shelf? */
+  private fitsAt(r: number, entry: Entry, x: number) {
+    const before = resolveRow(this.shelves[r]).filter((p) => p.hidden).length;
+    const after = resolveRow(this.shelves[r], { entry, x });
+    return !after.some((p) => p.hidden && p.extra) && after.filter((p) => p.hidden && !p.extra).length <= before;
+  }
+
+  /**
+   * Best spot for `entry` on row `r`, as close to `x` as possible, or null if
+   * the row is full. Tries the pointer position first, then every gap.
+   */
+  private findSpot(r: number, entry: Entry, x: number): number | null {
+    if (this.fitsAt(r, entry, x)) return x;
+    const seg = baySegs()[0];
+    const vis = resolveRow(this.shelves[r]).filter((p) => !p.hidden);
+    const starts = [0.6, ...vis.map((p) => rowX(p.x + p.w) + 0.8)].filter((c) => c + entryWidth(entry) <= seg.x1 - seg.x0 - 0.6);
+    starts.sort((a, b) => Math.abs(a - x) - Math.abs(b - x));
+    for (const c of starts) if (this.fitsAt(r, entry, c)) return c;
+    return null;
   }
 
   /** Undo a drag that turned out to be a click: the book goes back exactly where it was. */
