@@ -753,7 +753,7 @@ export class LibraryEngine {
     // Phones show the same image dimmer than a desktop monitor, so give them a
     // little more exposure. It scales all light equally: colours, contrast and
     // the look are unchanged (desktop stays at 1.0).
-    const exposure = Math.min(w, h) < 600 ? 1.25 : 1.0;
+    const exposure = Math.min(w, h) < 600 ? 1.50 : 1.0;
     this.shelfR.toneMappingExposure = exposure;
     this.heroR.toneMappingExposure = exposure;
     this.applyView();
