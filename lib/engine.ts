@@ -10,6 +10,9 @@ import * as THREE from "three/webgpu";
 import { BOOKS, BOOK_BY_ID, ROMAN, SHELVES, initialRows, type Entry, type Pose } from "./books";
 import {
   CASE,
+  assignInitialX,
+  entryWidth,
+  rowX,
   baySegs,
   caseBounds,
   fitFrame,
@@ -65,6 +68,8 @@ interface BookState {
   inHand: boolean; // shown as the close-up instead
   // choreographed move (pose change / drop): pull clear of the shelf, turn, set down
   tw: { from: THREE.Vector3; fromQ: THREE.Quaternion; t: number; dur: number; zc: number; yc: number } | null;
+  /** the last stretch of a return flight, continued on the shelf (same curve) */
+  ret: Tween | null;
 }
 
 interface HeroArt {
@@ -102,6 +107,8 @@ interface Tween {
   pullEnd: number;
   ease?: (t: number) => number;
   lw?: [number, number];
+  /** stop (and call done) at this progress instead of 1 — used for hand-offs */
+  until?: number;
   done?: () => void;
 }
 
@@ -113,6 +120,29 @@ const easeOut = (t: number) => 1 - Math.pow(1 - t, 3.2);
 // pose-change phases: out [0, PH_OUT], turn [PH_OUT, PH_IN], in [PH_IN, 1]
 const PH_OUT = 0.26;
 const PH_IN = 0.72;
+/** Pose along a flight at progress t (0..1): one curve, used by the close-up and the shelf copy alike. */
+function tweenPose(tw: Tween, t: number) {
+  const e = (tw.ease ?? easeInOut)(t);
+  const to = tw.to();
+  const p0 = tw.from.pos;
+  const p1 = p0.clone().add(new THREE.Vector3(0, 0, tw.pullStart));
+  const p3 = to.pos;
+  const p2 = p3.clone().add(new THREE.Vector3(0, 0, tw.pullEnd));
+  const u = 1 - e;
+  const pos = p0
+    .clone()
+    .multiplyScalar(u * u * u)
+    .addScaledVector(p1, 3 * u * u * e)
+    .addScaledVector(p2, 3 * u * e * e)
+    .addScaledVector(p3, e * e * e);
+  // rotation lags the position a touch so the book clears its slot first
+  const rStart = tw.pullStart > 0 ? 0.06 : 0;
+  const rEnd = tw.pullEnd > 0 ? 0.88 : 1;
+  const rt = (tw.ease ?? easeInOut)(THREE.MathUtils.clamp((t - rStart) / (rEnd - rStart), 0, 1));
+  const quat = new THREE.Quaternion().slerpQuaternions(tw.from.quat, to.quat, rt);
+  return { pos, quat, e };
+}
+
 /** z at which a book's centre is far enough forward to turn freely in front of the shelf. */
 function clearZ(id: string) {
   const b = BOOK_BY_ID[id];
@@ -142,7 +172,8 @@ export class LibraryEngine {
   private books = new Map<string, BookState>();
   private meshes: THREE.Mesh[] = [];
   // five rows; each row's entries run left to right across all bays
-  private shelves: Entry[][] = initialRows();
+  // five rows of positioned entries; laid out once the screen size is known
+  private shelves: Entry[][] = [];
   private ray = new THREE.Raycaster();
   private key!: THREE.DirectionalLight;
   private hemi!: THREE.HemisphereLight;
@@ -174,6 +205,9 @@ export class LibraryEngine {
     lx: number;
     ly: number;
     t: number;
+    t0: number;
+    cx0: number;
+    cy0: number;
     pointerId: number;
     type: string;
     active: boolean;
@@ -184,7 +218,8 @@ export class LibraryEngine {
     id: string;
     entry: Entry;
     offset: THREE.Vector2;
-    target: { shelf: number; index: number; stack?: number };
+    target: { shelf: number; x: number; stack?: number };
+    origin: { shelf: number; x: number; stack: Entry | null; k: number };
     vx: number;
     lastX: number;
   } | null = null;
@@ -214,6 +249,7 @@ export class LibraryEngine {
       const r = this.root.getBoundingClientRect();
       setFrame(fitFrame(r.width, Math.max(1, r.height)));
     }
+    this.shelves = assignInitialX(initialRows());
     this.buildFurniture();
     this.buildLights();
     this.buildHeroLights();
@@ -284,6 +320,7 @@ export class LibraryEngine {
     wood: THREE.Material;
     side: THREE.Material;
     sideWorld: THREE.Material;
+    darkWorld: THREE.Material;
     dark: THREE.Material;
     wall: THREE.Material;
     floor: THREE.Material;
@@ -301,10 +338,14 @@ export class LibraryEngine {
       woodV.center.set(0.5, 0.5);
       woodV.rotation = Math.PI / 2;
       woodV.needsUpdate = true;
+      // one large wood image, mapped by real size, so the case's sides, top
+      // and the wood beyond it share the same continuous grain with no repeats
+      const woodBig = this.canvasTex(drawWood(2048, 2048, "woodbig"));
       this.furnMats = {
         wood: new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.8 }),
         side: new THREE.MeshStandardMaterial({ map: woodV, roughness: 0.8 }),
-        sideWorld: new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.8 }),
+        sideWorld: new THREE.MeshStandardMaterial({ map: woodBig, roughness: 0.8 }),
+        darkWorld: new THREE.MeshStandardMaterial({ map: woodBig, roughness: 0.85, color: 0x8a7464 }),
         dark: new THREE.MeshStandardMaterial({ map: woodH, roughness: 0.85, color: 0x8a7464 }),
         wall: new THREE.MeshStandardMaterial({ map: this.canvasTex(drawBackWall(1024, 2048)), roughness: 0.95 }),
         floor: new THREE.MeshStandardMaterial({ color: 0x0a0705, roughness: 1 }),
@@ -368,10 +409,12 @@ export class LibraryEngine {
       add(worldWoodUV(new THREE.BoxGeometry(side, sideH, depth + 3), pos), M.sideWorld, pos.x, pos.y, pos.z);
     }
     // crown (the header board), cornice, moulding, plinth
-    add(new THREE.BoxGeometry(caseW, F.crown, depth + 3), M.wood, 0, B.crownBottom + F.crown / 2, -depth / 2 + 1.5, false, crown);
-    add(new THREE.BoxGeometry(caseW + 5, cornice, depth + 6), M.dark, 0, B.top - cornice / 2, -depth / 2 + 2, false, crown);
+    const W3 = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, parent?: THREE.Object3D) =>
+      add(worldWoodUV(geo, new THREE.Vector3(x, y, z)), mat, x, y, z, false, parent);
+    W3(new THREE.BoxGeometry(caseW, F.crown, depth + 3), M.sideWorld, 0, B.crownBottom + F.crown / 2, -depth / 2 + 1.5, crown);
+    W3(new THREE.BoxGeometry(caseW + 5, cornice, depth + 6), M.darkWorld, 0, B.top - cornice / 2, -depth / 2 + 2, crown);
     add(new THREE.BoxGeometry(caseW - side * 2, 1.6, 1.6), M.dark, 0, B.crownBottom + 0.8, 1.2, false, crown);
-    add(new THREE.BoxGeometry(caseW + 2, plinth, depth + 4), M.dark, 0, B.bot + plinth / 2, -depth / 2 + 2);
+    W3(new THREE.BoxGeometry(caseW + 2, plinth, depth + 4), M.darkWorld, 0, B.bot + plinth / 2, -depth / 2 + 2);
     // Desktop: the case's side panels simply carry on to both screen edges
     // as plain wood (same material, same depth), as do crown, cornice and plinth.
     if (F.roomW && F.roomW > caseW + 1) {
@@ -381,9 +424,9 @@ export class LibraryEngine {
         const cx = dir * (caseW / 2 + wingW / 2);
         const pos = new THREE.Vector3(cx, B.bot + sideH / 2, -depth / 2 + 1.5);
         add(worldWoodUV(new THREE.BoxGeometry(wingW, sideH, depth + 3), pos), M.sideWorld, pos.x, pos.y, pos.z);
-        add(new THREE.BoxGeometry(wingW, F.crown, depth + 3), M.wood, cx, B.crownBottom + F.crown / 2, -depth / 2 + 1.5, false, crown);
-        add(new THREE.BoxGeometry(wingW, cornice, depth + 6), M.dark, cx, B.top - cornice / 2, -depth / 2 + 2, false, crown);
-        add(new THREE.BoxGeometry(wingW, plinth, depth + 4), M.dark, cx, B.bot + plinth / 2, -depth / 2 + 2);
+        W3(new THREE.BoxGeometry(wingW, F.crown, depth + 3), M.sideWorld, cx, B.crownBottom + F.crown / 2, -depth / 2 + 1.5, crown);
+        W3(new THREE.BoxGeometry(wingW, cornice, depth + 6), M.darkWorld, cx, B.top - cornice / 2, -depth / 2 + 2, crown);
+        W3(new THREE.BoxGeometry(wingW, plinth, depth + 4), M.darkWorld, cx, B.bot + plinth / 2, -depth / 2 + 2);
       }
     }
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(caseW + 600, 300), M.floor);
@@ -458,6 +501,7 @@ export class LibraryEngine {
           offShelf: true,
           inHand: false,
           tw: null,
+          ret: null,
         });
       }
     }
@@ -520,9 +564,29 @@ export class LibraryEngine {
 
   // ------------------------------------------------------------------ layout
 
-  private relayout(snap = false) {
-    const ph = this.drag && this.drag.target.stack === undefined ? { shelf: this.drag.target.shelf, index: this.drag.target.index, entry: this.drag.entry } : undefined;
-    const { targets, spans, hidden } = layoutAll(this.shelves, ph);
+  /**
+   * Re-solve every row. `pin` keeps one entry exactly where it is (the book
+   * just dropped or re-posed) and pushes its neighbours instead; `persist`
+   * writes the resolved positions back, so pushed books stay pushed.
+   */
+  private relayout(snap = false, pin?: { shelf: number; entry: Entry }, persist = false) {
+    const dr = this.drag;
+    const extra = dr && dr.target.stack === undefined ? { shelf: dr.target.shelf, entry: dr.entry, x: dr.target.x } : undefined;
+    const { targets, spans, hidden, placed } = layoutAll(this.shelves, { extra, pin });
+    if (persist) {
+      placed.forEach((row, r) => {
+        const vis = row.filter((p) => !p.extra && !p.hidden);
+        let tail = vis.length ? rowX(vis[vis.length - 1].x + vis[vis.length - 1].w) : 0;
+        for (const p of row) {
+          if (p.extra) continue;
+          // books that don't fit queue up past the end, keeping their order
+          const e = p.e as { x?: number };
+          if (p.hidden) e.x = Math.max(e.x ?? 0, (tail += 1));
+          else e.x = rowX(p.x);
+        }
+        this.shelves[r].sort((a, b) => ((a as { x?: number }).x ?? 0) - ((b as { x?: number }).x ?? 0));
+      });
+    }
     this.ensureBooks(targets.keys());
     targets.forEach((t: Target, id) => {
       const s = this.books.get(id)!;
@@ -596,18 +660,31 @@ export class LibraryEngine {
     if (!loc) return;
     const list = this.shelves[loc.shelf];
     const e = list[loc.index];
+    if (e.kind === "space") return;
+    const ex = e.x ?? 0;
+    const center = ex + entryWidth(e) / 2;
+    let changed: Entry;
     if (e.kind === "book") {
-      if (pose === "flat") list[loc.index] = { kind: "stack", ids: [id] };
-      else e.pose = pose;
-    } else if (e.kind === "stack") {
-      if (pose === "flat") return;
-      if (e.ids.length === 1) list[loc.index] = { kind: "book", id, pose };
+      if (pose === "flat") changed = list[loc.index] = { kind: "stack", ids: [id] };
       else {
+        e.pose = pose;
+        changed = e;
+      }
+      // turns in place: stays centred on the same spot, neighbours make room
+      changed.x = center - entryWidth(changed) / 2;
+    } else {
+      if (pose === "flat") return;
+      if (e.ids.length === 1) {
+        changed = list[loc.index] = { kind: "book", id, pose };
+        changed.x = center - entryWidth(changed) / 2;
+      } else {
+        // taken off a stack: it stands up right beside it
         e.ids.splice(loc.k, 1);
-        list.splice(loc.index + 1, 0, { kind: "book", id, pose });
+        changed = { kind: "book", id, pose, x: ex + entryWidth(e) + 0.7 };
+        list.splice(loc.index + 1, 0, changed);
       }
     }
-    this.relayout();
+    this.relayout(false, { shelf: loc.shelf, entry: changed }, true);
     this.choreograph(id, this.reduced ? 0.25 : 0.75);
     this.setHandled(id);
   }
@@ -800,7 +877,22 @@ export class LibraryEngine {
       }
       if (this.ptrs.size > 2) return;
       const id = this.pick(p.x, p.y);
-      this.down = { id, x: p.x, y: p.y, lx: p.x, ly: p.y, t: performance.now(), pointerId: e.pointerId, type: e.pointerType, active: false, panning: false, timer: null };
+      this.down = {
+        id,
+        x: p.x,
+        y: p.y,
+        lx: p.x,
+        ly: p.y,
+        t: performance.now(),
+        t0: performance.now(),
+        cx0: e.clientX,
+        cy0: e.clientY,
+        pointerId: e.pointerId,
+        type: e.pointerType,
+        active: false,
+        panning: false,
+        timer: null,
+      };
       if (id) {
         this.prepareArt(id);
         // long-press picks a book up (on touch this is the only way, so a
@@ -821,7 +913,8 @@ export class LibraryEngine {
       const d = this.down;
       if (d && d.pointerId === e.pointerId) {
         this.lastPtr = p;
-        const moved = Math.hypot(p.x - d.x, p.y - d.y) > 6;
+        // a click that wobbles a few pixels (trackpads!) must stay a click
+        const moved = Math.hypot(p.x - d.x, p.y - d.y) > (d.type === "mouse" ? 12 : 8);
         if (!d.active && !d.panning && moved) {
           if (d.timer) clearTimeout(d.timer);
           // mouse on a book drags it; anything else pans the shelf
@@ -854,6 +947,12 @@ export class LibraryEngine {
       this.down = null;
       this.lastPtr = null;
       if (d.active) {
+        // a quick, short "drag" was really a click: put the book back, open it
+        const quick = performance.now() - d.t0 < 280 && Math.hypot(e.clientX - d.cx0, e.clientY - d.cy0) < 26;
+        if (quick && !cancelled && this.cancelDrag()) {
+          this.open(d.id!);
+          return;
+        }
         this.endDrag();
         return;
       }
@@ -913,27 +1012,29 @@ export class LibraryEngine {
     const list = this.shelves[loc.shelf];
     const e = list[loc.index];
     let entry: Entry;
-    let index = loc.index;
     if (e.kind === "stack") {
       e.ids.splice(loc.k, 1);
-      entry = { kind: "stack", ids: [id] };
+      entry = { kind: "stack", ids: [id], x: e.x };
       if (e.ids.length === 0) list.splice(loc.index, 1);
-      else index = loc.index + 1;
     } else {
       entry = list.splice(loc.index, 1)[0];
     }
+    const startX = (entry as { x?: number }).x ?? 0;
+    const origin = { shelf: loc.shelf, x: startX, stack: e.kind === "stack" && e.ids.length > 0 ? e : null, k: loc.k };
     const s = this.books.get(id)!;
     const p = this.pointOnPlane(cx, cy, clearZ(id));
     this.drag = {
       id,
       entry,
       offset: new THREE.Vector2(s.pos.x - p.x, s.pos.y - p.y),
-      target: { shelf: loc.shelf, index },
+      target: { shelf: loc.shelf, x: startX },
+      origin,
       vx: 0,
       lastX: p.x,
     };
     s.follow = true;
     s.tw = null;
+    s.ret = null;
     this.setHover(null);
     this.root.style.cursor = "grabbing";
     this.setHandled(id);
@@ -961,27 +1062,22 @@ export class LibraryEngine {
         shelf = i;
       }
     }
-    // (a full row just pushes its last book off the end, like a real shelf)
-    const tmp = new Map<string, Target>();
-    const spans = layoutRow(this.shelves[shelf], shelf, tmp, new Set());
-    let index = this.shelves[shelf].length;
+    // Free placement: the book lands wherever you hold it (its centre under
+    // the pointer); neighbours are only pushed if it actually touches them.
+    // A laid-flat book held over the middle of a stack joins the stack.
     let stack: number | undefined;
-    for (const sp of spans) {
-      if (sp.kind === "stack" && dr.entry.kind === "stack") {
+    if (dr.entry.kind === "stack") {
+      const { spans } = layoutRow(this.shelves[shelf], shelf, new Map<string, Target>(), new Set());
+      for (const sp of spans) {
+        if (sp.kind !== "stack" || sp.hidden) continue;
         const inset = (sp.x1 - sp.x0) * 0.22;
-        if (bx > sp.x0 + inset && bx < sp.x1 - inset) {
-          stack = sp.index;
-          break;
-        }
-      }
-      if ((sp.x0 + sp.x1) / 2 > bx) {
-        index = sp.index;
-        break;
+        if (bx > sp.x0 + inset && bx < sp.x1 - inset) stack = sp.index;
       }
     }
+    const x = rowX(bx) - entryWidth(dr.entry) / 2;
     const t = dr.target;
-    if (t.shelf !== shelf || t.index !== index || t.stack !== stack) {
-      dr.target = { shelf, index, stack };
+    if (t.shelf !== shelf || Math.abs(t.x - x) > 0.05 || t.stack !== stack) {
+      dr.target = { shelf, x, stack };
       this.relayout();
     }
 
@@ -997,21 +1093,43 @@ export class LibraryEngine {
     this.dirty = true;
   }
 
+  /** Undo a drag that turned out to be a click: the book goes back exactly where it was. */
+  private cancelDrag(): boolean {
+    const dr = this.drag;
+    if (!dr) return false;
+    const list = this.shelves[dr.origin.shelf];
+    const st = dr.origin.stack;
+    if (st && st.kind === "stack" && list.includes(st)) st.ids.splice(dr.origin.k, 0, dr.id);
+    else {
+      (dr.entry as { x?: number }).x = dr.origin.x;
+      list.push(dr.entry);
+      list.sort((a, b) => ((a as { x?: number }).x ?? 0) - ((b as { x?: number }).x ?? 0));
+    }
+    const s = this.books.get(dr.id)!;
+    s.follow = false;
+    this.drag = null;
+    this.root.style.cursor = "";
+    this.relayout();
+    return true;
+  }
+
   private endDrag() {
     const dr = this.drag;
     if (!dr) return;
     const list = this.shelves[dr.target.shelf];
-    if (dr.target.stack !== undefined) {
-      const st = list[dr.target.stack];
-      if (st && st.kind === "stack") st.ids.push(dr.id);
-      else list.splice(dr.target.index, 0, dr.entry);
+    let pin: Entry = dr.entry;
+    const st = dr.target.stack !== undefined ? list[dr.target.stack] : undefined;
+    if (st && st.kind === "stack") {
+      st.ids.push(dr.id);
+      pin = st;
     } else {
-      list.splice(Math.min(dr.target.index, list.length), 0, dr.entry);
+      (dr.entry as { x?: number }).x = dr.target.x;
+      list.push(dr.entry);
     }
     this.books.get(dr.id)!.follow = false;
     this.drag = null;
     this.root.style.cursor = "";
-    this.relayout();
+    this.relayout(false, { shelf: dr.target.shelf, entry: pin }, true);
     this.choreograph(dr.id, this.reduced ? 0.25 : 0.75);
     this.setHandled(dr.id);
   }
@@ -1089,38 +1207,39 @@ export class LibraryEngine {
     this.busy = true;
     this.mode = "shelf";
     this.cb.onMode("shelf", null);
-    // Fly back to a point just in front of the slot, already square to it.
-    // There the shelf's own copy of the book takes over and slides home in the
-    // shelf scene, so the landing is continuous (its shadow grows in as it
-    // goes) instead of the close-up vanishing and the shelf copy popping in.
-    const out = this.poseOf(id) === "flat" ? 7 : 9;
-    const front = () => s.tPos.clone().add(new THREE.Vector3(0, 0, out));
-    hero.tween = {
+    // One continuous flight back to the slot (straight in for the last bit).
+    // At 72% the shelf's own copy takes over on the same curve, at the same
+    // speed, so the motion never stops or reverses and its shadow slides in
+    // with it rather than snapping on at rest.
+    const pullEnd = this.poseOf(id) === "flat" ? 18 : 24;
+    const flight: Tween = {
       from: { pos: hero.group.position.clone(), quat: hero.group.quaternion.clone() },
-      to: () => ({ pos: front(), quat: s.tQuat }),
+      to: () => ({ pos: s.tPos, quat: s.tQuat }),
       t: 0,
-      dur: this.reduced ? 0.2 : 0.55,
+      dur: this.reduced ? 0.3 : 0.8,
       lw: [hero.lw, 0],
       pullStart: 0,
-      pullEnd: 6,
-      done: () => {
-        const f = front();
-        s.pos.copy(f);
-        s.quat.copy(s.tQuat);
-        s.vel.set(0, 0, 0);
-        // run only the final "slide straight in" phase (~0.25 s)
-        s.tw = { from: f.clone(), fromQ: s.tQuat.clone(), t: PH_IN, dur: this.reduced ? 0.4 : 0.9, zc: f.z, yc: -Infinity };
-        s.mesh.position.copy(f);
-        s.mesh.quaternion.copy(s.tQuat);
-        s.inHand = false;
-        this.syncVisible(s);
-        this.removeHero(hero);
-        this.hero = null;
-        this.busy = false;
-        this.dirty = true;
-        this.heroDirty = true;
-      },
+      pullEnd,
+      until: 0.72,
     };
+    flight.done = () => {
+      const P = tweenPose(flight, flight.t);
+      s.pos.copy(P.pos);
+      s.quat.copy(P.quat);
+      s.vel.set(0, 0, 0);
+      s.tw = null;
+      s.ret = { ...flight, until: undefined, done: undefined };
+      s.mesh.position.copy(P.pos);
+      s.mesh.quaternion.copy(P.quat);
+      s.inHand = false;
+      this.syncVisible(s);
+      this.removeHero(hero);
+      this.hero = null;
+      this.busy = false;
+      this.dirty = true;
+      this.heroDirty = true;
+    };
+    hero.tween = flight;
   }
 
   /** Step to the previous / next book in shelf order while the detail view is open. */
@@ -1412,6 +1531,23 @@ export class LibraryEngine {
       pull.copy(s.tPos);
       if (this.hover === s.id && !this.drag) pull.z += 1.6;
       if (this.handled === s.id && !this.drag) pull.z += 0.8;
+      if (s.ret) {
+        const r = s.ret;
+        r.t = Math.min(1, r.t + dt / r.dur);
+        const P = tweenPose(r, r.t);
+        s.pos.copy(P.pos);
+        s.quat.copy(P.quat);
+        if (r.t >= 1) {
+          s.ret = null;
+          s.pos.copy(s.tPos);
+          s.quat.copy(s.tQuat);
+          s.vel.set(0, 0, 0);
+        }
+        moving = true;
+        s.mesh.position.copy(s.pos);
+        s.mesh.quaternion.copy(s.quat);
+        continue;
+      }
       if (s.tw) {
         const tw = s.tw;
         tw.t = Math.min(1, tw.t + dt / tw.dur);
@@ -1482,28 +1618,14 @@ export class LibraryEngine {
     if (h === this.hero) this.aimHeroLights(h);
     if (h.tween) {
       const tw = h.tween;
-      tw.t = Math.min(1, tw.t + dt / tw.dur);
-      const e = (tw.ease ?? easeInOut)(tw.t);
-      if (tw.lw) h.lw = THREE.MathUtils.lerp(tw.lw[0], tw.lw[1], e);
-      const to = tw.to();
-      // cubic bezier: slide straight out of the shelf, then swing to the reader
-      const p0 = tw.from.pos;
-      const p1 = p0.clone().add(new THREE.Vector3(0, 0, tw.pullStart));
-      const p3 = to.pos;
-      const p2 = p3.clone().add(new THREE.Vector3(0, 0, tw.pullEnd));
-      const u = 1 - e;
-      g.position
-        .copy(p0)
-        .multiplyScalar(u * u * u)
-        .addScaledVector(p1, 3 * u * u * e)
-        .addScaledVector(p2, 3 * u * e * e)
-        .addScaledVector(p3, e * e * e);
-      // rotation lags the position a touch so the book clears its slot first
-      const rStart = tw.pullStart > 0 ? 0.06 : 0;
-      const rEnd = tw.pullEnd > 0 ? 0.88 : 1;
-      const rt = (tw.ease ?? easeInOut)(THREE.MathUtils.clamp((tw.t - rStart) / (rEnd - rStart), 0, 1));
-      g.quaternion.slerpQuaternions(tw.from.quat, to.quat, rt);
-      if (tw.t >= 1) {
+      const end = tw.until ?? 1;
+      tw.t = Math.min(end, tw.t + dt / tw.dur);
+      const P = tweenPose(tw, tw.t);
+      // lighting blend completes by the hand-off point
+      if (tw.lw) h.lw = THREE.MathUtils.lerp(tw.lw[0], tw.lw[1], (tw.ease ?? easeInOut)(Math.min(1, tw.t / end)));
+      g.position.copy(P.pos);
+      g.quaternion.copy(P.quat);
+      if (tw.t >= end) {
         h.tween = null;
         tw.done?.();
       }
@@ -1547,7 +1669,7 @@ export class LibraryEngine {
  * box, so a 5 cm side panel and a 1 m wall show the same grain, and it runs
  * continuously from one into the other. Grain runs vertically.
  */
-function worldWoodUV(g: THREE.BufferGeometry, at: THREE.Vector3, along = 140, across = 70) {
+function worldWoodUV(g: THREE.BufferGeometry, at: THREE.Vector3, along = 300, across = 480) {
   const p = g.getAttribute("position");
   const n = g.getAttribute("normal");
   const uv = g.getAttribute("uv");
@@ -1558,9 +1680,13 @@ function worldWoodUV(g: THREE.BufferGeometry, at: THREE.Vector3, along = 140, ac
     const ax = Math.abs(n.getX(i)),
       ay = Math.abs(n.getY(i));
     // texture u runs along the grain (vertical), v across it
-    if (ay > 0.5) uv.setXY(i, z / along, x / across); // top / bottom
-    else if (ax > 0.5) uv.setXY(i, y / along, z / across); // left / right faces
-    else uv.setXY(i, y / along, x / across); // front / back
+    // offsets keep the whole case (y ~ -15..240, x ~ ±230) inside one tile:
+    // the image never wraps on screen, so there are no seams
+    const U = (v: number) => (v + 60) / along;
+    const V = (v: number) => (v + 240) / across;
+    if (ay > 0.5) uv.setXY(i, U(z), V(x)); // top / bottom
+    else if (ax > 0.5) uv.setXY(i, U(y), V(z)); // left / right faces
+    else uv.setXY(i, U(y), V(x)); // front / back
   }
   uv.needsUpdate = true;
   return g;

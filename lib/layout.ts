@@ -117,97 +117,125 @@ function gapBetween(a: Entry | null, b: Entry | null) {
   return GAP_OTHER;
 }
 
-type Item = Entry | { kind: "placeholder"; entry: Entry };
-const real = (e: Item): Entry => (e.kind === "placeholder" ? e.entry : e);
-
 /**
- * Flow the row's entries left to right through the bays, never letting an
- * entry straddle a divider. Spaces are scaled by `scale`; a space that hits a
- * divider is dropped. Returns placements and how many items fit.
+ * Turn the initial arrangement's spacers into positions, then drop them.
+ * Each shelf starts at most ~85% full and always with ~29 cm spare, so you can
+ * lay a book flat or turn one face-out by squeezing gaps without anything
+ * dropping off; the rest wait in storage past the end.
  */
-function flow(list: Item[], scale: number) {
-  const segs = baySegs();
-  let si = 0;
-  let x = segs[0].x0 + MARGIN;
-  let prev: Entry | null = null;
-  const placed: { x: number; w: number; bay: number }[] = [];
-  let fit = list.length;
-  for (let i = 0; i < list.length; i++) {
-    const r = real(list[i]);
-    const atStart = x <= segs[si].x0 + MARGIN + 1e-6;
-    if (r.kind === "space") {
-      const w = atStart ? 0 : Math.min(r.w * scale, Math.max(0, segs[si].x1 - MARGIN - x));
-      placed.push({ x, w, bay: si });
-      x += w;
-      continue;
-    }
-    const w = entryWidth(r);
-    let gap = atStart ? 0 : gapBetween(prev, r);
-    if (x + gap + w > segs[si].x1 - MARGIN) {
-      si++;
-      if (si >= segs.length) {
-        fit = i;
-        break;
+export function assignInitialX(rows: Entry[][], fill = 0.85) {
+  // leave enough room to lay any one book flat (tallest is 30 cm)
+  const cap = Math.min(FRAME.bayW * fill, FRAME.bayW - 29);
+  return rows.map((row) => {
+    let x = MARGIN;
+    let prev: Entry | null = null;
+    let stored = FRAME.bayW + 1;
+    const out: Entry[] = [];
+    for (const e of row) {
+      if (e.kind === "space") {
+        x += e.w;
+        continue;
       }
-      x = segs[si].x0 + MARGIN;
-      gap = 0;
+      const at = x + gapBetween(prev, e);
+      if (stored > FRAME.bayW + 1 || at + entryWidth(e) > cap) {
+        e.x = stored; // keep order, off the shelf
+        stored += entryWidth(e) + 1;
+      } else {
+        e.x = at;
+        x = at + entryWidth(e);
+        prev = e;
+      }
+      out.push(e);
     }
-    x += gap;
-    placed.push({ x, w, bay: si });
-    x += w;
-    prev = r;
-  }
-  return { placed, fit };
+    return out;
+  });
+}
+
+export interface Placed {
+  e: Entry;
+  x: number; // world x of the left edge
+  w: number;
+  hidden: boolean;
+  extra: boolean; // the book being dragged (not in the row yet)
 }
 
 /**
- * Lay out one row. `placeholder` reserves room for a book that is being
- * dragged, so neighbours part to show where it will land.
+ * Resolve a row: every entry wants to sit at its own x. Overlaps are pushed
+ * apart — away from the pinned entry (the one being dragged or just changed),
+ * so it stays exactly where you put it. Gaps squeeze before anything leaves
+ * the shelf; only when the row is genuinely full does its last book drop off.
+ */
+export function resolveRow(entries: Entry[], extra?: { entry: Entry; x: number }, pin?: Entry): Placed[] {
+  const seg = baySegs()[0];
+  const lo = seg.x0 + MARGIN;
+  const hi = seg.x1 - MARGIN;
+  const items: Placed[] = entries
+    .filter((e) => e.kind !== "space")
+    .map((e) => ({ e, x: seg.x0 + (e.x ?? 0), w: entryWidth(e), hidden: false, extra: false }));
+  if (extra) items.push({ e: extra.entry, x: seg.x0 + extra.x, w: entryWidth(extra.entry), hidden: false, extra: true });
+  const pinned = (p: Placed) => p.extra || p.e === pin;
+  // order by centre, so a book that widens in place (laid flat, turned face
+  // out) keeps its place in the run and pushes both neighbours evenly
+  items.sort((a, b) => a.x + a.w / 2 - (b.x + b.w / 2) || (pinned(a) ? -1 : pinned(b) ? 1 : 0));
+  const n = items.length;
+  const gap = (i: number) => (i > 0 ? gapBetween(items[i - 1].e, items[i].e) : 0);
+  const p = items.findIndex(pinned);
+  // books whose own position is past the end of the shelf are "in storage":
+  // they stay off-shelf (a shelf isn't packed to the brim just because it could be)
+  let m = items.findIndex((it, i) => i !== p && it.x >= hi - 1e-6);
+  if (m < 0) m = n;
+
+  // 1. push overlaps away from the pinned entry (or left-to-right without one)
+  for (let i = Math.max(1, p + 1); i < n; i++) items[i].x = Math.max(items[i].x, items[i - 1].x + items[i - 1].w + gap(i));
+  for (let i = p - 1; i >= 0; i--) items[i].x = Math.min(items[i].x, items[i + 1].x - gap(i + 1) - items[i].w);
+
+  // 2. of the books that belong on the shelf, how many fit (gaps squeezed)
+  let k = 0;
+  for (let i = 0, end = lo; i < m; i++) {
+    end += (i > 0 ? gap(i) : 0) + items[i].w;
+    if (end > hi + 1e-6) break;
+    k = i + 1;
+  }
+  // 3. keep the first k inside the shelf: squeeze back from the right, then from the left
+  if (k > 0) {
+    items[k - 1].x = Math.min(items[k - 1].x, hi - items[k - 1].w);
+    for (let i = k - 2; i >= 0; i--) items[i].x = Math.min(items[i].x, items[i + 1].x - gap(i + 1) - items[i].w);
+    items[0].x = Math.max(items[0].x, lo);
+    for (let i = 1; i < k; i++) items[i].x = Math.max(items[i].x, items[i - 1].x + items[i - 1].w + gap(i));
+  }
+  for (let i = k; i < n; i++) items[i].hidden = true;
+  return items;
+}
+
+/**
+ * Lay out one row. `extra` is a book being dragged: it is shown where it would
+ * land and neighbours make room for it.
  */
 export function layoutRow(
   entries: Entry[],
   row: number,
   out: Map<string, Target>,
   hidden: Set<string>,
-  placeholder?: { index: number; entry: Entry },
-): Span[] {
-  const list: Item[] = entries.slice();
-  if (placeholder) list.splice(placeholder.index, 0, { kind: "placeholder", entry: placeholder.entry });
-
-  // which entries fit at natural spacing; then open the gaps up (up to 4x)
-  // as far as possible without pushing anything else off the shelf
-  const base = flow(list, 1);
-  let best = base;
-  for (let s = 4; s > 1.01; s *= 0.88) {
-    const f = flow(list, s);
-    if (f.fit >= base.fit) {
-      best = f;
-      break;
-    }
-  }
-
+  extra?: { entry: Entry; x: number },
+  pin?: Entry,
+): { spans: Span[]; placed: Placed[] } {
+  const placed = resolveRow(entries, extra, pin);
   const y0 = surfaceY(row);
   const spans: Span[] = [];
-  let entryIndex = 0;
-  list.forEach((e, i) => {
-    const r = real(e);
-    const isPh = e.kind === "placeholder";
-    const p = i < best.fit ? best.placed[i] : undefined;
+  for (const it of placed) {
     spans.push({
-      index: isPh ? -1 : entryIndex,
-      x0: p ? p.x : Infinity,
-      x1: p ? p.x + p.w : Infinity,
-      kind: isPh ? "placeholder" : r.kind,
-      bay: p ? p.bay : -1,
-      hidden: !p,
+      index: it.extra ? -1 : entries.indexOf(it.e),
+      x0: it.hidden ? Infinity : it.x,
+      x1: it.hidden ? Infinity : it.x + it.w,
+      kind: it.extra ? "placeholder" : it.e.kind,
+      bay: it.hidden ? -1 : 0,
+      hidden: it.hidden,
     });
-    if (!isPh) {
-      if (!p) idsOf(r).forEach((id) => hidden.add(id));
-      else placeEntry(r, p.x, p.w, y0, out);
-      entryIndex++;
-    }
-  });
-  return spans;
+    if (it.extra) continue;
+    if (it.hidden) idsOf(it.e).forEach((id) => hidden.add(id));
+    else placeEntry(it.e, it.x, it.w, y0, out);
+  }
+  return { spans, placed };
 }
 
 export function idsOf(e: Entry): string[] {
@@ -252,15 +280,29 @@ function placeEntry(e: Entry, x: number, w: number, y0: number, out: Map<string,
 
 export function layoutAll(
   rows: Entry[][],
-  placeholder?: { shelf: number; index: number; entry: Entry },
-): { targets: Map<string, Target>; spans: Span[][]; hidden: Set<string> } {
+  opts: { extra?: { shelf: number; entry: Entry; x: number }; pin?: { shelf: number; entry: Entry } } = {},
+): { targets: Map<string, Target>; spans: Span[][]; hidden: Set<string>; placed: Placed[][] } {
   const targets = new Map<string, Target>();
   const hidden = new Set<string>();
-  const spans = rows.map((entries, r) =>
-    layoutRow(entries, r, targets, hidden, placeholder && placeholder.shelf === r ? placeholder : undefined),
-  );
-  return { targets, spans, hidden };
+  const spans: Span[][] = [];
+  const placed: Placed[][] = [];
+  rows.forEach((entries, r) => {
+    const res = layoutRow(
+      entries,
+      r,
+      targets,
+      hidden,
+      opts.extra && opts.extra.shelf === r ? opts.extra : undefined,
+      opts.pin && opts.pin.shelf === r ? opts.pin.entry : undefined,
+    );
+    spans.push(res.spans);
+    placed.push(res.placed);
+  });
+  return { targets, spans, hidden, placed };
 }
+
+/** Row-relative x (cm from the shelf's inner left) for a world x. */
+export const rowX = (worldX: number) => worldX - baySegs()[0].x0;
 
 export function poseQuat(pose: "spine" | "face" | "flat") {
   return (pose === "spine" ? Q_SPINE : pose === "face" ? Q_FACE : Q_FLAT).clone();

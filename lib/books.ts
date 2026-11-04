@@ -35,9 +35,11 @@ export interface Book {
   cover: CoverStyle;
 }
 
+// `x` is the entry's left edge in cm from the shelf's inner left side. Books
+// sit where you put them; spaces only exist in the initial arrangement.
 export type Entry =
-  | { kind: "book"; id: string; pose: "spine" | "face" }
-  | { kind: "stack"; ids: string[] }
+  | { kind: "book"; id: string; pose: "spine" | "face"; x?: number }
+  | { kind: "stack"; ids: string[]; x?: number }
   | { kind: "space"; w: number };
 
 export const SHELVES = [
