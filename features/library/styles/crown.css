@@ -1,0 +1,31 @@
+/* the pose control over the crown board, sized in units of the header's width */
+.crown {
+  position: absolute; z-index: 1;
+  --u: min(calc(var(--hw) / 100), calc(var(--vh, 999px) / 19));
+  font-size: calc(var(--u) * 3);
+  transition: opacity .4s ease;
+}
+.mode-detail .crown, .mode-reader .crown { opacity: 0; pointer-events: none; }
+.crown-inner { position: absolute; left: 0; right: 0; bottom: 0; height: var(--vh, 100%); }
+.crown-pose {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: calc(var(--u) * 1.6);
+  opacity: 0; pointer-events: none; transform: translateY(6px);
+  transition: opacity .35s ease, transform .35s ease;
+}
+.crown.is-handling .crown-pose { opacity: 1; pointer-events: auto; transform: none; }
+
+.segmented {
+  display: flex; padding: calc(var(--u) * .7); border-radius: 999px;
+  border: 1px solid rgba(201, 169, 93, .55); background: rgba(20, 10, 4, .35);
+}
+.segmented button {
+  padding: calc(var(--u) * 1.5) calc(var(--u) * 3.2); border-radius: 999px;
+  font: 500 calc(var(--u) * 2.6) / 1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
+  color: #c7b48a; transition: background .25s ease, color .25s ease;
+}
+.segmented button.on { background: #f1e6cb; color: #2a1a0e; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.hint {
+  margin: 0; font: 500 calc(var(--u) * 2.2) / 1 var(--sans);
+  letter-spacing: .24em; text-transform: uppercase; color: #bfa36a;
+}

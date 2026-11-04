@@ -1,0 +1,28 @@
+.library { position: fixed; inset: 0; }
+
+/* the stage shows the bookcase wood around and before the 3d scene */
+.stage {
+  position: absolute; inset: 0; overflow: hidden;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  background: linear-gradient(rgba(20, 10, 4, .18), rgba(20, 10, 4, .18)), var(--wood, #4a2c18) center / 256px auto;
+  background-color: #4a2c18;
+}
+.shelf-canvas, .hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hero-canvas { pointer-events: none; z-index: 5; }
+
+/* the shelf stops rendering while a book is open so the browser blurs one still frame */
+.shelf-canvas { transition: filter .35s ease; }
+.mode-detail .shelf-canvas, .mode-reader .shelf-canvas { filter: blur(10px); }
+.veil {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: rgba(24, 14, 8, 0);
+  transition: background .3s ease;
+}
+.mode-detail .veil { background: rgba(24, 14, 8, .26); }
+.mode-reader .veil { background: rgba(18, 10, 6, .42); }
+
+.loading {
+  position: absolute; inset: 0; display: grid; place-items: center; z-index: 6;
+  font: italic 500 20px var(--serif); color: var(--cream-dim);
+  background: radial-gradient(ellipse 70% 60% at 50% 42%, #5a3720 0%, #2e1c10 55%, #171009 100%);
+}

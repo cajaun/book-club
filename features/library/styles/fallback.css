@@ -1,0 +1,6 @@
+/* plain dom bookcase for browsers without gpu rendering */
+.fallback { position: absolute; inset: 0; overflow: auto; padding: 24px; z-index: 5; background: #120b07; }
+.fallback h1 { font: italic 500 40px var(--serif); text-align: center; margin: 8px 0 20px; }
+.fallback h2 { font: 500 11px var(--sans); letter-spacing: .3em; text-transform: uppercase; color: var(--gold); }
+.fallback-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px; background: #0d1712; border-bottom: 8px solid #4a2c1a; }
+.fallback-row button { writing-mode: vertical-rl; padding: 8px 4px; height: 150px; font: 600 12px var(--serif); border-radius: 2px; }
