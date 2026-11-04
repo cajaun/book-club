@@ -295,6 +295,7 @@ export default function Library() {
 
 function Fallback({ onOpen }: { onOpen: (id: string) => void }) {
   return (
+    
     <div className="fallback">
       <h1>Marginalia</h1>
       {SHELVES.map((name, s) => (
