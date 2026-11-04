@@ -11,7 +11,7 @@ import { BOOK_BY_ID, rng, type Entry } from "./books";
 
 export const CASE = {
   W: 108, // nominal bay interior width (cm)
-  compH: 33, // clear height of a compartment
+  compH: 31.5, // clear height of a compartment (tallest book is 30)
   board: 2.8, // shelf board thickness
   depth: 28, // interior depth (back wall at z = -depth)
   shelves: 5, // rows, always
@@ -38,22 +38,26 @@ export const setFrame = (f: Frame) => {
   FRAME = f;
 };
 
-const HEIGHT_NO_CROWN = CASE.plinth + CASE.board + interiorTop + CASE.board + CASE.cornice;
+// Fixed zoom (no pinch): how many screen pixels one centimetre of bookcase
+// gets. Five shelves are taller than the screen at this size, so the page
+// scrolls vertically; the width always fills the screen edge to edge.
+export const PX_PER_CM = { phone: 5.2, desktop: 6.2 };
+const CROWN = 26;
 
-/** Choose bays / widths / crown so the case exactly fills a screen of this aspect. */
-export function fitFrame(aspect: number): Frame {
-  const nominalCrown = 30;
-  const oneBayW = CASE.W + 2 * CASE.side;
-  // tall screens: one bay edge to edge; the crown grows to use the spare height
-  const crown = oneBayW / aspect - HEIGHT_NO_CROWN;
-  if (crown >= nominalCrown) return { bays: 1, bayW: CASE.W, crown: Math.min(crown, 95) };
-  // otherwise the five shelves set the height and the case is a single column
-  const visW = (HEIGHT_NO_CROWN + nominalCrown) * aspect;
-  // portrait-ish (tablets): still one bay, widened to stay edge to edge
-  if (aspect < 1) return { bays: 1, bayW: visW - 2 * CASE.side, crown: nominalCrown };
-  // desktop: one bookcase standing in the middle of the room
-  const bayW = Math.min(170, Math.max(CASE.W, visW * 0.5 - 2 * CASE.side));
-  return { bays: 1, bayW, crown: nominalCrown, roomW: visW };
+/**
+ * Size the single-column case to the screen. Phones/tablets: the bay is as
+ * wide as the screen shows at this zoom (edge to edge). Desktop: a centred
+ * column whose sides carry on as plain wood to the screen edges.
+ */
+export function fitFrame(w: number, h: number): Frame {
+  if (w < h) {
+    const visW = w / PX_PER_CM.phone;
+    const bayW = Math.min(170, Math.max(60, visW - 2 * CASE.side));
+    return { bays: 1, bayW, crown: CROWN };
+  }
+  const visW = w / PX_PER_CM.desktop;
+  const bayW = Math.min(170, Math.max(100, visW * 0.5 - 2 * CASE.side));
+  return { bays: 1, bayW, crown: CROWN, roomW: visW };
 }
 
 export function caseBounds() {

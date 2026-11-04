@@ -215,7 +215,7 @@ export class LibraryEngine {
 
     {
       const r = this.root.getBoundingClientRect();
-      setFrame(fitFrame(r.width / Math.max(1, r.height)));
+      setFrame(fitFrame(r.width, Math.max(1, r.height)));
     }
     this.buildFurniture();
     this.buildLights();
@@ -282,6 +282,7 @@ export class LibraryEngine {
   }
 
   private furniture = new THREE.Group();
+  private crownGroup = new THREE.Group();
   private furnMats: {
     wood: THREE.Material;
     side: THREE.Material;
@@ -327,14 +328,19 @@ export class LibraryEngine {
     this.scene.add(this.furniture);
 
     const { board, depth, side, plinth, cornice } = CASE;
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, shadow = true) => {
+    // The crown board is the sticky header: its pieces live in their own
+    // group, which applyView() keeps pinned to the top of the screen.
+    this.crownGroup = new THREE.Group();
+    this.furniture.add(this.crownGroup);
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, shadow = true, parent: THREE.Object3D = this.furniture) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
       m.castShadow = shadow;
       m.receiveShadow = true;
-      this.furniture.add(m);
+      parent.add(m);
       return m;
     };
+    const crown = this.crownGroup;
     const F = frame();
     const B = caseBounds();
     const caseW = B.right - B.left;
@@ -365,9 +371,9 @@ export class LibraryEngine {
       add(worldWoodUV(new THREE.BoxGeometry(side, sideH, depth + 3), pos), M.sideWorld, pos.x, pos.y, pos.z);
     }
     // crown (the header board), cornice, moulding, plinth
-    add(new THREE.BoxGeometry(caseW, F.crown, depth + 3), M.wood, 0, B.crownBottom + F.crown / 2, -depth / 2 + 1.5);
-    add(new THREE.BoxGeometry(caseW + 5, cornice, depth + 6), M.dark, 0, B.top - cornice / 2, -depth / 2 + 2);
-    add(new THREE.BoxGeometry(caseW - side * 2, 1.6, 1.6), M.dark, 0, B.crownBottom + 0.8, 1.2);
+    add(new THREE.BoxGeometry(caseW, F.crown, depth + 3), M.wood, 0, B.crownBottom + F.crown / 2, -depth / 2 + 1.5, false, crown);
+    add(new THREE.BoxGeometry(caseW + 5, cornice, depth + 6), M.dark, 0, B.top - cornice / 2, -depth / 2 + 2, false, crown);
+    add(new THREE.BoxGeometry(caseW - side * 2, 1.6, 1.6), M.dark, 0, B.crownBottom + 0.8, 1.2, false, crown);
     add(new THREE.BoxGeometry(caseW + 2, plinth, depth + 4), M.dark, 0, B.bot + plinth / 2, -depth / 2 + 2);
     // Desktop: the case's side panels simply carry on to both screen edges
     // as plain wood (same material, same depth), as do crown, cornice and plinth.
@@ -378,8 +384,8 @@ export class LibraryEngine {
         const cx = dir * (caseW / 2 + wingW / 2);
         const pos = new THREE.Vector3(cx, B.bot + sideH / 2, -depth / 2 + 1.5);
         add(worldWoodUV(new THREE.BoxGeometry(wingW, sideH, depth + 3), pos), M.sideWorld, pos.x, pos.y, pos.z);
-        add(new THREE.BoxGeometry(wingW, F.crown, depth + 3), M.wood, cx, B.crownBottom + F.crown / 2, -depth / 2 + 1.5);
-        add(new THREE.BoxGeometry(wingW, cornice, depth + 6), M.dark, cx, B.top - cornice / 2, -depth / 2 + 2);
+        add(new THREE.BoxGeometry(wingW, F.crown, depth + 3), M.wood, cx, B.crownBottom + F.crown / 2, -depth / 2 + 1.5, false, crown);
+        add(new THREE.BoxGeometry(wingW, cornice, depth + 6), M.dark, cx, B.top - cornice / 2, -depth / 2 + 2, false, crown);
         add(new THREE.BoxGeometry(wingW, plinth, depth + 4), M.dark, cx, B.bot + plinth / 2, -depth / 2 + 2);
       }
     }
@@ -656,7 +662,7 @@ export class LibraryEngine {
       this.heroR.setSize(w, h, false);
     }
     this.camera.aspect = this.size.w / this.size.h;
-    const f = fitFrame(this.size.w / this.size.h);
+    const f = fitFrame(this.size.w, this.size.h);
     const cur = frame();
     if (changed && this.mode === "shelf" && !this.drag && (f.bays !== cur.bays || Math.abs(f.bayW - cur.bayW) > 0.5 || Math.abs(f.crown - cur.crown) > 0.5)) {
       setFrame(f);
@@ -673,19 +679,23 @@ export class LibraryEngine {
     }
   }
 
-  // The case is sized to the screen (see fitFrame), so the camera simply
-  // frames all of it: five shelves, edge to edge, no scrolling or zooming.
+  // The case is sized to the screen's width (see fitFrame) at a fixed zoom;
+  // it is taller than the screen, so you scroll vertically (swipe, wheel,
+  // trackpad). No pinch / zoom.
   private view: { cx: number; cy: number; viewH: number } | null = null;
+  private headerH = 0;
+  private headerW = 0;
 
   private bounds() {
     return caseBounds();
   }
 
-  /** Visible height (cm) at the case front that shows the whole case. */
+  /** Visible height (cm): the visible width (case or room) at this aspect. */
   private framedH() {
     const B = this.bounds();
     const aspect = this.size.w / this.size.h;
-    return Math.max(B.top - B.bot, (B.right - B.left) / aspect);
+    const visW = frame().roomW ?? B.right - B.left;
+    return visW / aspect;
   }
 
   private defaultView() {
@@ -700,8 +710,8 @@ export class LibraryEngine {
     v.viewH = this.framedH();
     v.cx = 0;
     const hh = v.viewH / 2;
-    // anchored to the top; any spare height (very tall phones) falls below
-    v.cy = B.top - hh;
+    // scroll between the top of the crown and the bottom of the plinth
+    v.cy = 2 * hh >= B.top - B.bot ? B.top - hh : THREE.MathUtils.clamp(v.cy, B.bot + hh, B.top - hh);
   }
 
   private applyView() {
@@ -718,11 +728,19 @@ export class LibraryEngine {
     this.camera.far = dist + 400;
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
-    // tell the DOM where the crown board is so the header sits on it
+    // Sticky header: slide the crown board down by however far we've scrolled,
+    // so it always sits at the top of the screen (same wood, same light).
+    this.crownGroup.position.y = Math.min(0, v.cy + v.viewH / 2 - caseBounds().top);
+    // The header is a fixed bar pinned to the top of the screen, as tall as
+    // the crown board (it covers the crown when you're at the top). It never
+    // moves or resizes while scrolling, so only report it when its size changes.
     const B = this.bounds();
-    const a = this.project(new THREE.Vector3(B.left, B.top - 2.4, 1.5));
-    const b = this.project(new THREE.Vector3(B.right, B.crownBottom, 1.5));
-    this.cb.onHeaderRect({ x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y });
+    const h = Math.round((B.top - B.crownBottom) * (this.size.h / v.viewH));
+    if (h !== this.headerH || this.size.w !== this.headerW) {
+      this.headerH = h;
+      this.headerW = this.size.w;
+      this.cb.onHeaderRect({ x: 0, y: 0, w: this.size.w, h });
+    }
     this.dirty = true;
   }
 

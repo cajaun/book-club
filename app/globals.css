@@ -83,7 +83,7 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 3px; }
   display: flex; align-items: center; justify-content: center;
   transition: opacity .35s ease, transform .35s ease;
 }
-.crown-logo { padding: 0 max(calc(var(--u) * 5), calc(var(--inset, 0px) + 14px)); gap: calc(var(--u) * 2.6); }
+.crown-logo { padding: 0 max(calc(var(--u) * 5), 14px); gap: calc(var(--u) * 2.6); max-width: 760px; margin: 0 auto; }
 .crown-pose { flex-direction: column; gap: calc(var(--u) * 1.6); opacity: 0; pointer-events: none; transform: translateY(6px); }
 .crown.is-handling .crown-logo { opacity: 0; pointer-events: none; transform: translateY(-6px); }
 .crown.is-handling .crown-pose { opacity: 1; pointer-events: auto; transform: none; }

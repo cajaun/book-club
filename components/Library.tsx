@@ -136,24 +136,17 @@ export default function Library() {
     return pool.filter((b) => (b.title + " " + b.author).toLowerCase().includes(q)).slice(0, 12);
   }, [query, shelved]);
 
-  // The header rides on the bookcase's crown board. When you scroll down it
-  // follows the crown up, then sticks as a compact bar so search and the
-  // pose toggle stay reachable.
-  const stageW = rootRef.current?.clientWidth ?? header?.w ?? 0;
-  const compactH = stageW < 700 ? 62 : 72;
-  const hdrTop = header ? Math.max(header.y, compactH - header.h) : 0;
-  const visibleH = header ? hdrTop + header.h - Math.max(hdrTop, 0) : 0;
-  const stuck = header ? hdrTop > header.y + 0.5 : false;
+  // Transparent overlay for the logo and search button. The wood underneath
+  // is the bookcase's own 3D crown board, which the engine keeps pinned to the
+  // top of the screen, so it always matches the shelves.
   const headerStyle = header
     ? ({
-        left: header.x,
-        top: hdrTop,
+        left: 0,
+        top: 0,
         width: header.w,
         height: header.h,
-        "--hw": `${Math.min(header.w, stageW, 680)}px`,
-        "--vh": `${visibleH}px`,
-        // when the case is wider than the screen, keep the controls on-screen
-        "--inset": `${Math.max(0, -header.x, header.x + header.w - stageW)}px`,
+        "--hw": `${Math.min(header.w, 680)}px`,
+        "--vh": `${header.h}px`,
       } as React.CSSProperties)
     : { display: "none" };
 
@@ -166,7 +159,7 @@ export default function Library() {
         <canvas ref={heroRef} className="hero-canvas" aria-hidden />
 
         {/* crown: logo, or the pose control while a book is in hand */}
-        <header className={`crown ${handle && mode === "shelf" ? "is-handling" : ""} ${stuck ? "is-stuck" : ""}`} style={headerStyle}>
+        <header className={`crown ${handle && mode === "shelf" ? "is-handling" : ""}`} style={headerStyle}>
           <div className="crown-inner">
           <div className="crown-logo">
             <button className="brass" aria-label="Search the shelves" onClick={() => setSearchOpen(true)}>
