@@ -46,8 +46,15 @@ export const SHELVES = [
   "Gothic & Mystery",
   "Poetry & Ideas",
   "Adventure & Wonder",
+  "Plays & Drama",
+  "Science & Discovery",
+  "History & Letters",
+  "Tales & Fables",
+  "Myth & Legend",
 ];
-export const ROMAN = ["I", "II", "III", "IV", "V"];
+export const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+/** Shelves per bookcase bay. */
+export const ROWS_PER_BAY = 5;
 
 // [title, author, year, pages, blurb]
 type Row = [string, string, number, number, string];
@@ -161,6 +168,109 @@ const CATALOGUE: Row[][] = [
     ["King Solomon's Mines", "H. Rider Haggard", 1885, 288, "Three Englishmen follow a crumbling map across a desert in search of a lost brother."],
     ["The Last of the Mohicans", "James Fenimore Cooper", 1826, 432, "In the French and Indian War, a scout and two Mohicans guide two sisters through the forest."],
     ["The Lost World", "Arthur Conan Doyle", 1912, 288, "Professor Challenger leads an expedition to a plateau where the dinosaurs never left."],
+  ],
+  [
+    ["Hamlet", "William Shakespeare", 1603, 192, "A prince is visited by his father's ghost and asked to do the one thing he cannot make himself do."],
+    ["Macbeth", "William Shakespeare", 1623, 128, "Three witches, one prophecy, and a husband and wife who will not wait for fate."],
+    ["King Lear", "William Shakespeare", 1608, 208, "An old king divides his kingdom by flattery and is left with nothing but the truth."],
+    ["Othello", "William Shakespeare", 1622, 176, "A trusted ensign drips poison into a general's ear, one handkerchief at a time."],
+    ["A Midsummer Night's Dream", "William Shakespeare", 1600, 112, "Four lovers, a troupe of players and a fairy king lose themselves in one enchanted wood."],
+    ["The Tempest", "William Shakespeare", 1623, 128, "On an island of spirits, an exiled duke raises a storm and then decides to let it go."],
+    ["Romeo and Juliet", "William Shakespeare", 1597, 160, "Two households, both alike in dignity, and the two children who end their feud."],
+    ["Twelfth Night", "William Shakespeare", 1623, 128, "Shipwrecked in Illyria, a woman disguises herself as a man and falls for her master."],
+    ["The Importance of Being Earnest", "Oscar Wilde", 1895, 96, "Two young men invent alter egos named Ernest, and both are found out at tea."],
+    ["A Doll's House", "Henrik Ibsen", 1879, 112, "Nora Helmer has kept one secret for her husband's sake; the door she closes is famous."],
+    ["Hedda Gabler", "Henrik Ibsen", 1891, 128, "A general's daughter, newly married and bored to death, takes hold of other people's lives."],
+    ["The Cherry Orchard", "Anton Chekhov", 1904, 96, "A family returns to its estate as the orchard is sold, and nobody quite says goodbye."],
+    ["Uncle Vanya", "Anton Chekhov", 1898, 96, "A professor and his young wife visit the country estate that has paid for everything."],
+    ["The Seagull", "Anton Chekhov", 1896, 96, "An actress, a writer and two young people who want to be them, by a lake in summer."],
+    ["Oedipus Rex", "Sophocles", -429, 96, "A king vows to find the cause of the plague on Thebes, and keeps his word."],
+    ["Medea", "Euripides", -431, 80, "Abandoned in a foreign city by the husband she saved, a sorceress plans her answer."],
+    ["Faust", "Johann Wolfgang von Goethe", 1808, 480, "A scholar who has read everything makes a wager with the devil for one perfect moment."],
+    ["Tartuffe", "Molière", 1664, 112, "A pious fraud moves into a wealthy household and very nearly takes it over."],
+    ["Cyrano de Bergerac", "Edmond Rostand", 1897, 240, "A poet-swordsman with a famous nose writes love letters for a handsomer man."],
+    ["Pygmalion", "George Bernard Shaw", 1913, 128, "A phonetics professor bets he can pass off a flower girl as a duchess."],
+  ],
+  [
+    ["On the Origin of Species", "Charles Darwin", 1859, 512, "One long argument, built from barnacles, pigeons and finches, for how life changes."],
+    ["The Voyage of the Beagle", "Charles Darwin", 1839, 496, "Five years at sea with a young naturalist who has not yet had his idea."],
+    ["The Descent of Man", "Charles Darwin", 1871, 704, "Darwin turns his theory, carefully and controversially, on ourselves."],
+    ["Principia", "Isaac Newton", 1687, 974, "Three laws of motion and one of gravity, and the heavens and the earth obey them both."],
+    ["Opticks", "Isaac Newton", 1704, 416, "A prism, a dark room and a beam of sunlight: the colours were in the light all along."],
+    ["Dialogue Concerning the Two Chief World Systems", "Galileo Galilei", 1632, 512, "Three friends debate whether the earth moves; the Inquisition took the other side."],
+    ["The Starry Messenger", "Galileo Galilei", 1610, 96, "A new telescope, the moons of Jupiter and mountains on the moon, reported in a hurry."],
+    ["Elements", "Euclid", -300, 528, "From five postulates, the whole of plane geometry, in the order it is still taught."],
+    ["Relativity", "Albert Einstein", 1916, 176, "Einstein explains special and general relativity to the general reader, with trains."],
+    ["The Interpretation of Dreams", "Sigmund Freud", 1899, 640, "Every dream is a wish, Freud argues, and he begins with his own."],
+    ["Micrographia", "Robert Hooke", 1665, 320, "A flea the size of a page, and the first use of the word cell."],
+    ["Flatland", "Edwin A. Abbott", 1884, 112, "A square in a two-dimensional world is visited by a sphere and cannot explain it."],
+    ["The Wealth of Nations", "Adam Smith", 1776, 1264, "Pin factories, the division of labour and the invisible hand."],
+    ["The Natural History of Selborne", "Gilbert White", 1789, 288, "A country parson watches swifts, tortoises and weather in one English village for forty years."],
+    ["Kosmos", "Alexander von Humboldt", 1845, 480, "An explorer's attempt to describe the whole physical universe as one connected thing."],
+    ["The Principles of Psychology", "William James", 1890, 1408, "The stream of consciousness, habit and attention, in the founding text of the field."],
+    ["Novum Organum", "Francis Bacon", 1620, 336, "A new instrument for the mind: observe first, theorise after."],
+    ["Experiments in Plant Hybridization", "Gregor Mendel", 1866, 64, "Eight years of pea plants in a monastery garden, and the laws of inheritance."],
+  ],
+  [
+    ["The Histories", "Herodotus", -430, 768, "The first history: the Persian Wars, and every marvel the author heard along the way."],
+    ["The Peloponnesian War", "Thucydides", -400, 640, "Athens and Sparta destroy each other, recorded by a general who lost a battle in it."],
+    ["The Decline and Fall of the Roman Empire", "Edward Gibbon", 1776, 1312, "Thirteen centuries of Rome's long fall, told with irony and magnificent sentences."],
+    ["The Annals", "Tacitus", 116, 464, "Rome under Tiberius, Claudius and Nero, written by a man who saw where it led."],
+    ["Parallel Lives", "Plutarch", 100, 864, "Famous Greeks and Romans in pairs, judged by their characters rather than their battles."],
+    ["The Gallic War", "Julius Caesar", -50, 288, "Caesar's own account of conquering Gaul, written in the third person."],
+    ["Letters to a Young Poet", "Rainer Maria Rilke", 1929, 96, "Ten letters to a young man who asked whether he should write. Go into yourself."],
+    ["The Diary of Samuel Pepys", "Samuel Pepys", 1825, 576, "The plague, the Great Fire and a great deal of dinner, in a private shorthand diary."],
+    ["Confessions", "Augustine of Hippo", 400, 352, "A restless young man's account of the years before he found rest."],
+    ["The Autobiography of Benjamin Franklin", "Benjamin Franklin", 1791, 256, "A printer's apprentice runs away to Philadelphia and becomes nearly everything else."],
+    ["Narrative of the Life of Frederick Douglass", "Frederick Douglass", 1845, 144, "Written by himself: how a man who was enslaved learned to read, and walked free."],
+    ["Democracy in America", "Alexis de Tocqueville", 1835, 928, "A young French aristocrat tours the United States and sees its future clearly."],
+    ["The Federalist Papers", "Hamilton, Madison & Jay", 1788, 624, "Eighty-five essays arguing a new country into ratifying its constitution."],
+    ["Common Sense", "Thomas Paine", 1776, 64, "Forty-seven pages that turned a colonial grievance into a revolution."],
+    ["A Vindication of the Rights of Woman", "Mary Wollstonecraft", 1792, 320, "Educate women as rational beings, and see what they become."],
+    ["The Souls of Black Folk", "W. E. B. Du Bois", 1903, 272, "The problem of the twentieth century is the problem of the colour line."],
+    ["Up from Slavery", "Booker T. Washington", 1901, 224, "From a slave cabin in Virginia to the founding of Tuskegee."],
+    ["The Travels of Marco Polo", "Marco Polo", 1300, 352, "A Venetian merchant's account of Kublai Khan's court, dictated from a prison cell."],
+    ["Letters from an American Farmer", "J. Hector St. John de Crèvecœur", 1782, 256, "What, then, is the American, this new man?"],
+  ],
+  [
+    ["Aesop's Fables", "Aesop", -550, 224, "The tortoise and the hare, the fox and the grapes, and the boy who cried wolf."],
+    ["Grimms' Fairy Tales", "Jacob & Wilhelm Grimm", 1812, 576, "Hansel and Gretel, Rapunzel, Rumpelstiltskin, and the dark woods around them."],
+    ["Andersen's Fairy Tales", "Hans Christian Andersen", 1835, 448, "The little mermaid, the ugly duckling and the emperor with no clothes."],
+    ["One Thousand and One Nights", "Anonymous", 800, 896, "Scheherazade tells a king a story each night, and stops just before the ending."],
+    ["Dubliners", "James Joyce", 1914, 224, "Fifteen stories of a city's paralysis, ending in snow falling faintly on the living and the dead."],
+    ["The Canterbury Tales", "Geoffrey Chaucer", 1400, 512, "Thirty pilgrims ride to Canterbury and tell stories to win a free supper."],
+    ["The Decameron", "Giovanni Boccaccio", 1353, 864, "Ten young Florentines flee the plague and tell a hundred stories in ten days."],
+    ["The Metamorphosis", "Franz Kafka", 1915, 96, "Gregor Samsa wakes one morning transformed into a monstrous insect, and is late for work."],
+    ["The Overcoat", "Nikolai Gogol", 1842, 64, "A poor clerk saves for a new coat, and it becomes the whole of his life."],
+    ["The Lady with the Dog", "Anton Chekhov", 1899, 64, "A holiday affair in Yalta that both of them expect to forget."],
+    ["The Legend of Sleepy Hollow", "Washington Irving", 1820, 96, "A schoolmaster rides home through the Hudson Valley, and something rides after him."],
+    ["The Gift of the Magi", "O. Henry", 1905, 48, "A poor young couple each sell their one treasure to buy the other a Christmas present."],
+    ["The Yellow Wallpaper", "Charlotte Perkins Gilman", 1892, 64, "Confined to a nursery for a rest cure, a young mother begins to see a woman in the pattern."],
+    ["Bartleby, the Scrivener", "Herman Melville", 1853, 64, "A Wall Street copyist who would prefer not to."],
+    ["The Necklace", "Guy de Maupassant", 1884, 48, "A clerk's wife borrows a diamond necklace for one evening, and loses it."],
+    ["Just So Stories", "Rudyard Kipling", 1902, 192, "How the leopard got his spots, and how the camel got his hump, O Best Beloved."],
+    ["Winesburg, Ohio", "Sherwood Anderson", 1919, 256, "The lonely, secret lives of one small town, told through a young reporter."],
+    ["Tales from Shakespeare", "Charles & Mary Lamb", 1807, 320, "Twenty plays retold as stories for young readers by a brother and sister."],
+  ],
+  [
+    ["The Epic of Gilgamesh", "Anonymous", -1200, 128, "The oldest story we have: a king, his wild friend, and the search for eternal life."],
+    ["Beowulf", "Anonymous", 1000, 160, "A hero crosses the sea to kill a monster, and then the monster's mother."],
+    ["The Aeneid", "Virgil", -19, 448, "A Trojan survivor carries his father and his gods out of the burning city towards Rome."],
+    ["Metamorphoses", "Ovid", 8, 608, "Two hundred and fifty myths of bodies changed into new forms, from chaos to Caesar."],
+    ["The Mahabharata", "Vyasa", -400, 960, "The great war of two branches of one family, and everything else besides."],
+    ["The Ramayana", "Valmiki", -300, 512, "Prince Rama's exile, the abduction of Sita, and the long road to Lanka."],
+    ["Le Morte d'Arthur", "Thomas Malory", 1485, 960, "The whole Arthurian legend, from the sword in the stone to the last battle."],
+    ["Sir Gawain and the Green Knight", "Anonymous", 1390, 128, "A green giant rides into Camelot at Christmas and offers a deadly game."],
+    ["The Song of Roland", "Anonymous", 1100, 160, "Charlemagne's rearguard is ambushed at Roncevaux, and Roland is too proud to sound his horn."],
+    ["The Nibelungenlied", "Anonymous", 1200, 416, "Siegfried, Kriemhild and a hoard of gold at the bottom of the Rhine."],
+    ["The Kalevala", "Elias Lönnrot", 1835, 672, "Finland's epic of singers, smiths and the magic mill called the Sampo."],
+    ["The Poetic Edda", "Anonymous", 1270, 384, "Odin, Thor and the end of the world, in the poems of the Norse gods."],
+    ["Theogony", "Hesiod", -700, 96, "How the Greek gods were born, and how Zeus came to rule them."],
+    ["The Argonautica", "Apollonius of Rhodes", -250, 224, "Jason and his heroes sail to the edge of the world for a golden fleece."],
+    ["The Tale of Genji", "Murasaki Shikibu", 1010, 1216, "A shining prince's loves and losses at the Heian court, in what may be the first novel."],
+    ["Journey to the West", "Wu Cheng'en", 1592, 1024, "A monk travels to India for scriptures, protected by a monkey king who once fought heaven."],
+    ["The Shahnameh", "Ferdowsi", 1010, 896, "Fifty thousand couplets of Persian kings and heroes, from the creation to the Arab conquest."],
+    ["The Mabinogion", "Anonymous", 1350, 288, "Welsh tales of enchanted hounds, a woman made of flowers and the hero Pwyll."],
   ],
 ];
 
@@ -321,6 +431,22 @@ export const INITIAL_SHELVES: Entry[][] = [
     ...run("Gulliver's Travels", "The Time Machine", "Heart of Darkness", "The Swiss Family Robinson", "King Solomon's Mines", "The Last of the Mohicans"),
   ],
 ];
+
+// Shelves VI-X: arranged by the same pattern as the reference (a face-out
+// cover, runs of spines, one small stack, breathing gaps).
+for (let shelf = INITIAL_SHELVES.length; shelf < SHELVES.length; shelf++) {
+  const ids = BOOKS.filter((b) => b.shelf === shelf).map((b) => b.id);
+  const r = rng("arrange" + shelf);
+  const face = ids.shift()!;
+  const stackAt = 6 + Math.floor(r() * 4);
+  const stack = ids.splice(stackAt, 3);
+  const row: Entry[] = [{ kind: "book", id: face, pose: "face" }, { kind: "space", w: 1 }];
+  ids.forEach((id, i) => {
+    if (i === stackAt) row.push({ kind: "space", w: 6 }, { kind: "stack", ids: stack }, { kind: "space", w: 2 });
+    row.push({ kind: "book", id, pose: "spine" });
+  });
+  INITIAL_SHELVES.push(row);
+}
 
 export function formatYear(y: number) {
   return y < 0 ? `${-y} BC` : `${y}`;

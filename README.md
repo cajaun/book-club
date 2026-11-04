@@ -16,7 +16,9 @@ npm run dev     # http://localhost:3000
 
 | Gesture | What happens |
 | --- | --- |
-| Drag a book (or long-press it) | The book lifts and tilts with the motion. Neighbours part to show where it will land. It can go to another shelf, and a laid-flat book dropped on a stack joins the stack. |
+| Drag empty space / swipe / scroll wheel / trackpad | Pans around the bookcase. The header follows the crown board, then sticks as a compact bar. |
+| Pinch, ctrl+wheel, or `+` / `-` | Zoom (from close-up out to the whole case) |
+| Drag a book with the mouse (or long-press it on touch) | The book lifts and tilts with the motion. Neighbours part to show where it will land. It can go to another shelf, and a laid-flat book dropped on a stack joins the stack. |
 | Header toggle while a book is in hand | Spine out / Face out / Laid flat |
 | Tap the book in hand | Cycles its pose ("tap to stand it up") |
 | Tap any other book | It slides out of its slot (or off its stack), turns, and flies to the reader. The shelf blurs and the detail panel appears. |
@@ -28,7 +30,7 @@ npm run dev     # http://localhost:3000
 
 ```
 lib/books.ts      manifest: catalogue + initial arrangement (single source of truth)
-lib/layout.ts     pure solver: arrangement -> world transform per book
+lib/layout.ts     pure solver: arrangement -> world transform per book; bay geometry
 lib/textures.ts   Canvas2D art: spines, covers, title pages, wood, plaques, atlas packer
 lib/engine.ts     three.js WebGPURenderer, springs, picking, drag, hero flight
 components/Library.tsx   React: crown header, pose control, detail/reader panels,
@@ -38,6 +40,8 @@ components/Library.tsx   React: crown header, pose control, detail/reader panels
 - **Renderer.** three.js `WebGPURenderer`. It uses WebGPU where available and falls back to WebGL2 automatically, with the same scene code on both. If neither works, there's a DOM fallback. If the GPU device is lost, the engine rebuilds itself.
 - **Two canvases.** The shelf canvas renders on demand, only while something moves. A transparent hero canvas sits above a CSS `backdrop-filter` blur layer. Both use one camera, so the hand-off from shelf to hero is pixel-identical.
 - **One material for every book.** All spines and covers are drawn into a single texture atlas with Canvas2D at load, so nothing is downloaded. Each book is a box whose UVs point into the atlas. The hero book is a separate, detailed model: hinged front board, page block, endpapers and title page drawn at 40 px/cm.
+- **Bays.** The library is two five-shelf bookcases, side by side on wide screens (so it runs edge to edge) and stacked on tall ones. Crossing the threshold while resizing re-flows the books.
+- **Colour.** Both canvases use AgX tone mapping and matte (Lambert) book materials, so the palette stays soft and a book looks identical on the shelf and in the hand.
 - **Layout is data.** Dragging, stacking and pose changes only edit `Entry[][]`. `layoutAll()` returns targets, and critically damped springs (fixed 240 Hz sub-steps) animate towards them.
 - **The DOM drives 3D placement.** The detail and reader views contain empty slot elements, and the hero book is fitted to the slot's rectangle every frame. Responsive layout is therefore just CSS.
 - **Accessibility and SEO.** A real list of every book is server-rendered as buttons. Keyboard focus highlights the book on the shelf, Enter opens it, and Esc closes it. `prefers-reduced-motion` shortens every flight.

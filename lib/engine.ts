@@ -45,10 +45,27 @@ interface BookState {
   tPos: THREE.Vector3;
   tQuat: THREE.Quaternion;
   follow: boolean; // dragged: track the pointer tightly
+  // choreographed move (pose change / drop): pull clear of the shelf, turn, set down
+  tw: { from: THREE.Vector3; fromQ: THREE.Quaternion; t: number; dur: number; zc: number; yc: number } | null;
 }
+
+interface HeroArt {
+  cover: HTMLCanvasElement;
+  spine: HTMLCanvasElement;
+  back: HTMLCanvasElement;
+  pages: HTMLCanvasElement;
+  title: HTMLCanvasElement;
+  end: HTMLCanvasElement;
+}
+
+const ART_FAST = 14; // px/cm, same as the shelf atlas
+const ART_SHARP = 40; // px/cm, close-up
 
 interface Hero {
   id: string;
+  sharp: boolean;
+  lw: number; // 0 = lit like the shelf, 1 = lit relative to its cover
+  maps: Record<"cover" | "spine" | "title" | "end", THREE.MeshLambertMaterial>;
   group: THREE.Group;
   pivot: THREE.Object3D;
   dispose(): void;
@@ -65,12 +82,35 @@ interface Tween {
   dur: number;
   pullStart: number; // cm the book slides towards the reader before turning
   pullEnd: number;
+  ease?: (t: number) => number;
+  lw?: [number, number];
   done?: () => void;
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// fast start, soft landing: the book reacts on the same frame as the tap
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 3.2);
+// pose-change phases: out [0, PH_OUT], turn [PH_OUT, PH_IN], in [PH_IN, 1]
+const PH_OUT = 0.26;
+const PH_IN = 0.72;
+/** z at which a book's centre is far enough forward to turn freely in front of the shelf. */
+function clearZ(id: string) {
+  const b = BOOK_BY_ID[id];
+  return 1.2 + Math.sqrt(b.h * b.h + b.d * b.d + b.t * b.t) / 2;
+}
+
+// One light rig, used by both the shelf and the hero scene, so a book looks
+// identical on the shelf and in the reader's hands.
+const LIGHT = {
+  on: { hemi: 2.15, key: 3.0, fill: 1.15, keyColor: 0xffe6c0 },
+  off: { hemi: 0.7, key: 0.8, fill: 0.35, keyColor: 0xa9bcdc },
+  sky: 0xfff3e2,
+  ground: 0x4a3626,
+  keyPos: new THREE.Vector3(70, 170, 460),
+  fillPos: new THREE.Vector3(-60, 80, 400),
+};
 
 export class LibraryEngine {
   private shelfR!: THREE.WebGPURenderer;
@@ -79,7 +119,7 @@ export class LibraryEngine {
   private heroScene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(20, 1, 10, 3000);
   private atlas!: Atlas;
-  private bookMat!: THREE.MeshStandardMaterial;
+  private bookMat!: THREE.MeshLambertMaterial;
   private books = new Map<string, BookState>();
   private meshes: THREE.Mesh[] = [];
   private shelves: Entry[][] = INITIAL_SHELVES.map((s) => s.map((e) => (e.kind === "stack" ? { ...e, ids: [...e.ids] } : { ...e })));
@@ -87,6 +127,12 @@ export class LibraryEngine {
   private key!: THREE.DirectionalLight;
   private hemi!: THREE.HemisphereLight;
   private fill!: THREE.DirectionalLight;
+  private hHemi!: THREE.HemisphereLight;
+  private hKey!: THREE.DirectionalLight;
+  private hFill!: THREE.DirectionalLight;
+  private art = new Map<string, HeroArt>();
+  private snapTimer: ReturnType<typeof setTimeout> | null = null;
+  private wasMoving = false;
   private size = { w: 1, h: 1 };
   private dirty = true;
   private heroDirty = false;
@@ -107,8 +153,13 @@ export class LibraryEngine {
     id: string | null;
     x: number;
     y: number;
+    lx: number;
+    ly: number;
+    t: number;
     pointerId: number;
+    type: string;
     active: boolean;
+    panning: boolean;
     timer: ReturnType<typeof setTimeout> | null;
   } | null = null;
   private drag: {
@@ -124,6 +175,7 @@ export class LibraryEngine {
     private root: HTMLElement,
     private shelfCanvas: HTMLCanvasElement,
     private heroCanvas: HTMLCanvasElement,
+    private snapCanvas: HTMLCanvasElement,
     private fonts: Fonts,
     private cb: EngineCallbacks,
   ) {}
@@ -146,6 +198,7 @@ export class LibraryEngine {
     this.buildLights();
     this.buildHeroLights();
     this.relayout(true);
+    await this.warmUp();
 
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(this.root);
@@ -161,11 +214,32 @@ export class LibraryEngine {
     this.raf = requestAnimationFrame(loop);
   }
 
+  /**
+   * Compile the hero's GPU pipelines up front. Without this the first tap
+   * pays for shader compilation (100–400 ms on WebGPU) before the book moves.
+   */
+  private async warmUp() {
+    try {
+      const h = this.makeHero(BOOKS[0].id);
+      h.group.position.set(0, this.camera.position.y, this.camera.position.z - 300);
+      const r = this.heroR as unknown as { compileAsync?: (s: THREE.Scene, c: THREE.Camera) => Promise<void> };
+      if (r.compileAsync) await r.compileAsync(this.heroScene, this.camera);
+      else this.heroR.render(this.heroScene, this.camera);
+      this.removeHero(h);
+      this.heroR.render(this.heroScene, this.camera);
+    } catch {
+      /* warm-up is best effort */
+    }
+  }
+
   private async makeRenderer(canvas: HTMLCanvasElement, forceWebGL: boolean) {
     const r = new THREE.WebGPURenderer({ canvas, antialias: true, alpha: true, forceWebGL });
     await r.init();
     r.setClearColor(0x000000, 0);
-    r.toneMapping = THREE.NoToneMapping;
+    // neutral tone mapping keeps cream pages and gold foil from clipping at
+    // the brighter exposure, without shifting the palette
+    r.toneMapping = THREE.NeutralToneMapping;
+    r.toneMappingExposure = 1.3;
     r.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     (r as unknown as { onDeviceLost: () => void }).onDeviceLost = () => this.cb.onLost();
     canvas.addEventListener("webglcontextlost", () => this.cb.onLost());
@@ -258,7 +332,9 @@ export class LibraryEngine {
   private buildBooks() {
     this.atlas = buildAtlas(BOOKS, this.fonts, 4096);
     const tex = this.canvasTex(this.atlas.canvas, false);
-    this.bookMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.78, metalness: 0 });
+    // Diffuse-only (no view-dependent sheen): a book must look the same on the
+    // shelf and in the hand, whatever angle it is seen from.
+    this.bookMat = new THREE.MeshLambertMaterial({ map: tex });
     for (const b of BOOKS) {
       const geo = bookGeometry(b.id, this.atlas);
       const mesh = new THREE.Mesh(geo, this.bookMat);
@@ -276,15 +352,16 @@ export class LibraryEngine {
         tPos: new THREE.Vector3(),
         tQuat: new THREE.Quaternion(),
         follow: false,
+        tw: null,
       });
     }
   }
 
   private buildLights() {
-    this.hemi = new THREE.HemisphereLight(0xffe9cc, 0x2a1a10, 1.35);
+    this.hemi = new THREE.HemisphereLight(LIGHT.sky, LIGHT.ground, LIGHT.on.hemi);
     this.scene.add(this.hemi);
-    const key = new THREE.DirectionalLight(0xffe0b0, 2.6);
-    key.position.set(70, 170, 460);
+    const key = new THREE.DirectionalLight(LIGHT.on.keyColor, LIGHT.on.key);
+    key.position.copy(LIGHT.keyPos);
     key.target.position.set(0, interiorTop / 2, -CASE.depth / 2);
     key.castShadow = true;
     key.shadow.mapSize.set(2048, 2048);
@@ -300,27 +377,34 @@ export class LibraryEngine {
     key.shadow.radius = 3;
     this.scene.add(key, key.target);
     this.key = key;
-    this.fill = new THREE.DirectionalLight(0xfff2e0, 0.75);
-    this.fill.position.set(-60, 80, 400);
+    this.fill = new THREE.DirectionalLight(0xfff2e0, LIGHT.on.fill);
+    this.fill.position.copy(LIGHT.fillPos);
     this.scene.add(this.fill);
   }
 
   private buildHeroLights() {
-    this.heroScene.add(new THREE.HemisphereLight(0xfff1dc, 0x302018, 1.6));
-    const k = new THREE.DirectionalLight(0xfff0d8, 2.2);
-    k.position.set(-1, 1.4, 2);
-    this.heroScene.add(k);
-    const rim = new THREE.DirectionalLight(0xffd9a0, 0.8);
-    rim.position.set(2, 0.5, -0.5);
-    this.heroScene.add(rim);
+    // same rig as the shelf (directional lights only care about direction)
+    this.hHemi = new THREE.HemisphereLight(LIGHT.sky, LIGHT.ground, LIGHT.on.hemi);
+    this.hKey = new THREE.DirectionalLight(LIGHT.on.keyColor, LIGHT.on.key);
+    this.hKey.position.copy(this.key.position).sub(this.key.target.position);
+    this.hFill = new THREE.DirectionalLight(0xfff2e0, LIGHT.on.fill);
+    this.hFill.position.copy(LIGHT.fillPos);
+    this.heroScene.add(this.hHemi, this.hKey, this.hFill);
   }
 
   setLamp(on: boolean) {
-    this.key.intensity = on ? 2.6 : 0.55;
-    this.key.color.set(on ? 0xffe0b0 : 0x9fb4d8);
-    this.hemi.intensity = on ? 1.35 : 0.45;
-    this.fill.intensity = on ? 0.75 : 0.25;
+    const L = on ? LIGHT.on : LIGHT.off;
+    for (const [hemi, key, fill] of [
+      [this.hemi, this.key, this.fill],
+      [this.hHemi, this.hKey, this.hFill],
+    ] as const) {
+      hemi.intensity = L.hemi;
+      key.intensity = L.key;
+      key.color.set(L.keyColor);
+      fill.intensity = L.fill;
+    }
     this.dirty = true;
+    this.heroDirty = true;
   }
 
   // ------------------------------------------------------------------ layout
@@ -382,12 +466,29 @@ export class LibraryEngine {
         list.splice(loc.index + 1, 0, { kind: "book", id, pose });
       }
     }
-    // give the move a little lift so turning books clear their neighbours
-    const s = this.books.get(id)!;
-    s.vel.z += 40;
-    s.vel.y += 25;
     this.relayout();
+    this.choreograph(id, this.reduced ? 0.25 : 0.75);
     this.setHandled(id);
+  }
+
+  /**
+   * Move a book along a path that stays in front of the shelf while it turns,
+   * so it never cuts through the board or its neighbours.
+   */
+  private choreograph(id: string, dur: number) {
+    const s = this.books.get(id);
+    if (!s) return;
+    const b = BOOK_BY_ID[id];
+    const zc = clearZ(id);
+    const loc = this.locate(id);
+    // while turning, keep the lowest corner above the shelf surface
+    const floor = loc ? surfaceY(loc.shelf) : s.tPos.y - b.h / 2;
+    const yc = floor + Math.max(b.h, b.d) / 2 + 0.6;
+    // already held clear (a drop)? skip the "pull out" phase
+    const t0 = s.pos.z >= zc - 0.5 ? PH_OUT : 0;
+    s.tw = { from: s.pos.clone(), fromQ: s.quat.clone(), t: t0, dur, zc, yc };
+    s.vel.set(0, 0, 0);
+    this.dirty = true;
   }
 
   private setHandled(id: string | null) {
@@ -406,30 +507,95 @@ export class LibraryEngine {
   private resize() {
     const r = this.root.getBoundingClientRect();
     this.size = { w: Math.max(1, r.width), h: Math.max(1, r.height) };
-    const aspect = this.size.w / this.size.h;
     this.shelfR.setSize(this.size.w, this.size.h, false);
     this.heroR.setSize(this.size.w, this.size.h, false);
-    this.camera.aspect = aspect;
-    const fov = this.camera.fov * (Math.PI / 180);
+    this.camera.aspect = this.size.w / this.size.h;
+    if (!this.view) this.view = this.defaultView();
+    this.applyView();
+    this.heroDirty = true;
+  }
+
+  // The case is ~2.4 m tall. Fitting all of it on screen makes spines
+  // unreadable, so the camera frames a readable part and you pan around it,
+  // like scrolling a page (drag / swipe / wheel; pinch or ctrl+wheel to zoom).
+  private view: { cx: number; cy: number; viewH: number } | null = null;
+
+  private bounds() {
     const top = interiorTop + CASE.board + CASE.crown + 2.4;
     const bot = -CASE.board - CASE.plinth;
-    const totalH = top - bot;
-    // fit the whole case vertically; on very narrow screens keep ~92cm visible
-    // (the sides crop exactly like the reference)
-    const viewH = Math.max(totalH + 4, 92 / aspect);
-    const dist = viewH / 2 / Math.tan(fov / 2);
-    this.camera.position.set(0, (top + bot) / 2, dist);
-    this.camera.lookAt(0, (top + bot) / 2, 0);
-    this.camera.near = 10;
+    const half = CASE.W / 2 + CASE.side;
+    return { top, bot, left: -half, right: half };
+  }
+
+  /** Visible height (cm) that fits the whole case: the zoom-out limit. */
+  private fitH() {
+    const B = this.bounds();
+    const aspect = this.size.w / this.size.h;
+    return Math.max(B.top - B.bot + 4, (B.right - B.left + 4) / aspect);
+  }
+
+  private defaultView() {
+    const B = this.bounds();
+    const aspect = this.size.w / this.size.h;
+    // phones: ~84 cm across (spines clearly legible, slight side crop like the
+    // reference); larger screens: ~7.5 px per cm
+    const target = this.size.w < 700 ? 84 / aspect : Math.max(95, this.size.h / 7.5);
+    const viewH = Math.min(this.fitH(), target);
+    return { cx: 0, cy: B.top - viewH / 2, viewH };
+  }
+
+  private clampView() {
+    const v = this.view!;
+    const B = this.bounds();
+    v.viewH = THREE.MathUtils.clamp(v.viewH, 55, this.fitH());
+    const hh = v.viewH / 2;
+    const hw = hh * (this.size.w / this.size.h);
+    const m = 2; // a sliver of room around the case
+    v.cx = 2 * hw >= B.right - B.left + 2 * m ? 0 : THREE.MathUtils.clamp(v.cx, B.left - m + hw, B.right + m - hw);
+    v.cy = 2 * hh >= B.top - B.bot + 2 * m ? (B.top + B.bot) / 2 : THREE.MathUtils.clamp(v.cy, B.bot - m + hh, B.top + m - hh);
+  }
+
+  private applyView() {
+    this.clampView();
+    const v = this.view!;
+    const fov = this.camera.fov * (Math.PI / 180);
+    const dist = v.viewH / 2 / Math.tan(fov / 2);
+    this.camera.position.set(v.cx, v.cy, dist);
+    this.camera.lookAt(v.cx, v.cy, 0);
+    this.camera.near = 5;
     this.camera.far = dist + 400;
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
     // tell the DOM where the crown board is so the header sits on it
-    const a = this.project(new THREE.Vector3(-(CASE.W / 2 + CASE.side), top - 2.4, 1.5));
-    const b = this.project(new THREE.Vector3(CASE.W / 2 + CASE.side, interiorTop + CASE.board, 1.5));
+    const B = this.bounds();
+    const a = this.project(new THREE.Vector3(B.left, B.top - 2.4, 1.5));
+    const b = this.project(new THREE.Vector3(B.right, interiorTop + CASE.board, 1.5));
     this.cb.onHeaderRect({ x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y });
     this.dirty = true;
-    this.heroDirty = true;
+  }
+
+  /** Pan by a screen-space delta (content follows the finger). */
+  private pan(dx: number, dy: number) {
+    if (!this.view) return;
+    const k = this.view.viewH / this.size.h;
+    this.view.cx -= dx * k;
+    this.view.cy += dy * k;
+    this.applyView();
+  }
+
+  /** Zoom about a screen point, keeping what is under it in place. */
+  private zoomAt(f: number, px: number, py: number) {
+    const v = this.view;
+    if (!v) return;
+    const aspect = this.size.w / this.size.h;
+    const nx = (px / this.size.w) * 2 - 1;
+    const ny = -((py / this.size.h) * 2 - 1);
+    const wx = v.cx + (nx * v.viewH * aspect) / 2;
+    const wy = v.cy + (ny * v.viewH) / 2;
+    v.viewH = THREE.MathUtils.clamp(v.viewH / f, 55, this.fitH());
+    v.cx = wx - (nx * v.viewH * aspect) / 2;
+    v.cy = wy - (ny * v.viewH) / 2;
+    this.applyView();
   }
 
   private project(v: THREE.Vector3) {
@@ -456,32 +622,84 @@ export class LibraryEngine {
 
   // ------------------------------------------------------------------ pointer
 
+  private ptrs = new Map<number, { x: number; y: number }>();
+  private pinch: { d: number; mx: number; my: number } | null = null;
+  private fling = { x: 0, y: 0 };
+  private lastPtr: { x: number; y: number } | null = null;
+
   private bindPointer() {
     const el = this.root;
-    const local = (e: PointerEvent) => {
+    const local = (e: { clientX: number; clientY: number }) => {
       const r = el.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+    const pinchState = () => {
+      const [a, b] = [...this.ptrs.values()];
+      return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
     };
     el.addEventListener("pointerdown", (e) => {
       if (this.mode !== "shelf" || this.busy || e.button !== 0) return;
       // only the shelf itself; the header and panels handle their own input
       if (e.target !== this.shelfCanvas && e.target !== el) return;
       const p = local(e);
+      this.ptrs.set(e.pointerId, p);
+      el.setPointerCapture(e.pointerId);
+      this.fling = { x: 0, y: 0 };
+      if (this.ptrs.size === 2) {
+        // second finger: pinch-zoom, abandon any tap / pick-up in progress
+        if (this.down?.timer) clearTimeout(this.down.timer);
+        if (this.down?.active) this.endDrag();
+        this.down = null;
+        this.pinch = pinchState();
+        return;
+      }
+      if (this.ptrs.size > 2) return;
       const id = this.pick(p.x, p.y);
-      this.down = { id, x: p.x, y: p.y, pointerId: e.pointerId, active: false, timer: null };
+      this.down = { id, x: p.x, y: p.y, lx: p.x, ly: p.y, t: performance.now(), pointerId: e.pointerId, type: e.pointerType, active: false, panning: false, timer: null };
       if (id) {
-        el.setPointerCapture(e.pointerId);
-        // long-press also picks a book up (touch-friendly)
+        this.prepareArt(id);
+        // long-press picks a book up (on touch this is the only way, so a
+        // swipe that starts on a book still scrolls)
         this.down.timer = setTimeout(() => {
-          if (this.down && !this.down.active && this.down.id) this.startDrag(this.down.x, this.down.y);
+          const d = this.down;
+          if (d && !d.active && !d.panning && d.id) {
+            navigator.vibrate?.(8);
+            this.startDrag(d.lx, d.ly);
+          }
         }, 380);
       }
     });
     el.addEventListener("pointermove", (e) => {
       const p = local(e);
-      if (this.down) {
-        if (!this.down.active && this.down.id && Math.hypot(p.x - this.down.x, p.y - this.down.y) > 6) this.startDrag(p.x, p.y);
-        if (this.down?.active) this.moveDrag(p.x, p.y);
+      if (this.ptrs.has(e.pointerId)) this.ptrs.set(e.pointerId, p);
+      if (this.pinch && this.ptrs.size >= 2) {
+        const n = pinchState();
+        this.pan(n.mx - this.pinch.mx, n.my - this.pinch.my);
+        this.zoomAt(n.d / Math.max(1, this.pinch.d), n.mx, n.my);
+        this.pinch = n;
+        return;
+      }
+      const d = this.down;
+      if (d && d.pointerId === e.pointerId) {
+        this.lastPtr = p;
+        const moved = Math.hypot(p.x - d.x, p.y - d.y) > 6;
+        if (!d.active && !d.panning && moved) {
+          if (d.timer) clearTimeout(d.timer);
+          // mouse on a book drags it; anything else pans the shelf
+          if (d.id && d.type === "mouse") this.startDrag(p.x, p.y);
+          else d.panning = true;
+        }
+        if (d.active) this.moveDrag(p.x, p.y);
+        else if (d.panning) {
+          const now = performance.now();
+          const dt = Math.max(1, now - d.t) / 1000;
+          this.fling = { x: (p.x - d.lx) / dt, y: (p.y - d.ly) / dt };
+          this.pan(p.x - d.lx, p.y - d.ly);
+          this.root.style.cursor = "grabbing";
+        }
+        d.lx = p.x;
+        d.ly = p.y;
+        d.t = performance.now();
         return;
       }
       if (this.mode !== "shelf" || this.busy) return;
@@ -489,13 +707,24 @@ export class LibraryEngine {
       this.setHover(id);
     });
     const up = (e: PointerEvent, cancelled = false) => {
+      this.ptrs.delete(e.pointerId);
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      if (this.pinch) {
+        if (this.ptrs.size < 2) this.pinch = null;
+        return;
+      }
       const d = this.down;
-      if (!d) return;
+      if (!d || d.pointerId !== e.pointerId) return;
       if (d.timer) clearTimeout(d.timer);
       this.down = null;
-      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      this.lastPtr = null;
       if (d.active) {
         this.endDrag();
+        return;
+      }
+      if (d.panning) {
+        this.root.style.cursor = "";
+        if (performance.now() - d.t > 80) this.fling = { x: 0, y: 0 }; // finger stopped before lifting
         return;
       }
       if (cancelled) return;
@@ -517,6 +746,25 @@ export class LibraryEngine {
     el.addEventListener("pointerleave", () => {
       if (!this.down) this.setHover(null);
     });
+    // wheel / trackpad: scroll the shelf; ctrl+wheel (trackpad pinch) zooms
+    el.addEventListener(
+      "wheel",
+      (e) => {
+        if (this.mode !== "shelf" || this.busy) return;
+        e.preventDefault();
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.size.h : 1;
+        if (e.ctrlKey) {
+          const p = local(e);
+          this.zoomAt(Math.exp(-e.deltaY * unit * 0.01), p.x, p.y);
+        } else this.pan(-e.deltaX * unit, -e.deltaY * unit);
+      },
+      { passive: false },
+    );
+  }
+
+  /** Keyboard / button zoom (+1 in, -1 out). */
+  zoomBy(dir: 1 | -1) {
+    this.zoomAt(dir > 0 ? 1.25 : 0.8, this.size.w / 2, this.size.h / 2);
   }
 
   setHover(id: string | null) {
@@ -547,7 +795,7 @@ export class LibraryEngine {
       entry = list.splice(loc.index, 1)[0];
     }
     const s = this.books.get(id)!;
-    const p = this.pointOnPlane(cx, cy, 6);
+    const p = this.pointOnPlane(cx, cy, clearZ(id));
     this.drag = {
       id,
       entry,
@@ -557,6 +805,7 @@ export class LibraryEngine {
       lastX: p.x,
     };
     s.follow = true;
+    s.tw = null;
     this.setHover(null);
     this.root.style.cursor = "grabbing";
     this.setHandled(id);
@@ -567,7 +816,7 @@ export class LibraryEngine {
     const dr = this.drag;
     if (!dr) return;
     const s = this.books.get(dr.id)!;
-    const p = this.pointOnPlane(cx, cy, 6);
+    const p = this.pointOnPlane(cx, cy, clearZ(dr.id));
     const bx = THREE.MathUtils.clamp(p.x + dr.offset.x, -CASE.W / 2 + 2, CASE.W / 2 - 2);
     const by = THREE.MathUtils.clamp(p.y + dr.offset.y, -2, interiorTop + 4);
     dr.vx = THREE.MathUtils.lerp(dr.vx, p.x - dr.lastX, 0.35);
@@ -621,9 +870,7 @@ export class LibraryEngine {
       .setFromAxisAngle(new THREE.Vector3(0, 0, 1), tilt)
       .multiply(new THREE.Quaternion().setFromAxisAngle(X_AXIS, 0.12))
       .multiply(poseQuat(pose));
-    const b = BOOK_BY_ID[dr.id];
-    const depth = pose === "face" ? b.t : b.d;
-    s.tPos.set(bx, by, 7 - depth / 2);
+    s.tPos.set(bx, by, clearZ(dr.id));
     s.tQuat.copy(q);
     this.dirty = true;
   }
@@ -643,6 +890,7 @@ export class LibraryEngine {
     this.drag = null;
     this.root.style.cursor = "";
     this.relayout();
+    this.choreograph(dr.id, this.reduced ? 0.25 : 0.75);
     this.setHandled(dr.id);
   }
 
@@ -654,7 +902,8 @@ export class LibraryEngine {
     const rootR = this.root.getBoundingClientRect();
     const cx = rect ? rect.left - rootR.left + rect.width / 2 : this.size.w / 2;
     const cy = rect ? rect.top - rootR.top + rect.height / 2 : this.size.h * 0.35;
-    const rh = rect ? rect.height : this.size.h * 0.4;
+    // leave a little air so the turned book never touches the text below
+    const rh = (rect ? rect.height : this.size.h * 0.4) * (mode === "detail" ? 0.9 : 1);
     const rw = rect ? rect.width : this.size.w * 0.6;
     const tan = Math.tan((this.camera.fov * Math.PI) / 360);
     const H = this.size.h;
@@ -683,10 +932,12 @@ export class LibraryEngine {
     const s = this.books.get(id);
     if (!s) return;
     this.setHover(null);
+    if (!this.snapReady) this.takeSnap(); // only if tapped before the shelf ever settled
     const hero = this.makeHero(id);
     hero.group.position.copy(s.pos);
     hero.group.quaternion.copy(s.quat);
     s.mesh.visible = false;
+    this.snapshot(true);
     this.hero = hero;
     this.mode = "detail";
     this.cb.onMode("detail", id);
@@ -696,9 +947,12 @@ export class LibraryEngine {
       from: { pos: s.pos.clone(), quat: s.quat.clone() },
       to: () => this.heroTarget("detail", id),
       t: 0,
-      dur: this.reduced ? 0.25 : 1.0,
+      dur: this.reduced ? 0.25 : 0.72,
+      ease: easeOut,
+      lw: [0, 1],
       pullStart: flat ? 16 : 22,
       pullEnd: 0,
+      done: () => this.sharpen(hero),
     };
   }
 
@@ -713,12 +967,14 @@ export class LibraryEngine {
     const s = this.books.get(id)!;
     this.busy = true;
     this.mode = "shelf";
+    this.snapshot(false);
     this.cb.onMode("shelf", null);
     hero.tween = {
       from: { pos: hero.group.position.clone(), quat: hero.group.quaternion.clone() },
       to: () => ({ pos: s.tPos, quat: s.tQuat }),
       t: 0,
-      dur: this.reduced ? 0.25 : 0.95,
+      dur: this.reduced ? 0.25 : 0.7,
+      lw: [hero.lw, 0],
       pullStart: 0,
       pullEnd: this.poseOf(id) === "flat" ? 16 : 22,
       done: () => {
@@ -770,6 +1026,7 @@ export class LibraryEngine {
     this.outgoing.push(old);
 
     const hero = this.makeHero(nextId);
+    hero.lw = 1;
     const target = this.heroTarget("detail", nextId);
     hero.group.position.copy(target.pos).sub(off);
     hero.group.quaternion.copy(new THREE.Quaternion().setFromAxisAngle(UP, dir * 0.6).multiply(target.quat));
@@ -778,9 +1035,11 @@ export class LibraryEngine {
       from: { pos: hero.group.position.clone(), quat: hero.group.quaternion.clone() },
       to: () => this.heroTarget("detail", nextId),
       t: 0,
-      dur: 0.55,
+      dur: 0.5,
+      ease: easeOut,
       pullStart: 0,
       pullEnd: 0,
+      done: () => this.sharpen(hero),
     };
     this.hero = hero;
     this.cb.onMode("detail", nextId);
@@ -837,9 +1096,38 @@ export class LibraryEngine {
     return 2 * dist * Math.tan((this.camera.fov * Math.PI) / 360) * this.camera.aspect;
   }
 
+  /**
+   * Close-up artwork for one book. Drawn when the finger/mouse goes down on a
+   * book (or on hover), so it is ready by the time the tap completes.
+   */
+  prepareArt(id: string, D = ART_FAST): HeroArt {
+    const key = `${id}@${D}`;
+    const hit = this.art.get(key);
+    if (hit) return hit;
+    const b = BOOK_BY_ID[id];
+    const board = 0.28;
+    const over = 0.3;
+    const cover = makeCanvas(b.d * D, b.h * D);
+    drawCover(cover.getContext("2d")!, 0, 0, cover.width, cover.height, b, this.fonts);
+    const spine = makeCanvas(Math.max(8, b.t * D), b.h * D);
+    drawSpine(spine.getContext("2d")!, 0, 0, spine.width, spine.height, b, this.fonts);
+    const back = makeCanvas(64, 64);
+    drawBack(back.getContext("2d")!, 0, 0, 64, 64, b);
+    const pages = makeCanvas(256, 256);
+    drawPages(pages.getContext("2d")!, 0, 0, 256, 256, b.id);
+    const title = makeCanvas((b.d - over - board) * D, (b.h - over * 2) * D);
+    drawTitlePage(title.getContext("2d")!, title.width, title.height, b, this.fonts);
+    const ew = D >= ART_SHARP ? 384 : 128;
+    const end = makeCanvas(ew, ew * 1.5);
+    drawEndpaper(end.getContext("2d")!, ew, ew * 1.5, b);
+    const art = { cover, spine, back, pages, title, end };
+    this.art.set(key, art);
+    if (this.art.size > 16) this.art.delete(this.art.keys().next().value!);
+    return art;
+  }
+
   private makeHero(id: string): Hero {
     const b = BOOK_BY_ID[id];
-    const D = 40; // px per cm for close-up art
     const board = 0.28;
     const over = 0.3;
     const tex: THREE.Texture[] = [];
@@ -850,33 +1138,25 @@ export class LibraryEngine {
       tex.push(t);
       return t;
     };
-    const M = (o: THREE.MeshStandardMaterialParameters) => {
-      const m = new THREE.MeshStandardMaterial({ roughness: 0.72, ...o });
+    const M = (o: THREE.MeshLambertMaterialParameters) => {
+      const m = new THREE.MeshLambertMaterial(o);
       mats.push(m);
       return m;
     };
     const G = (g: THREE.BufferGeometry) => (geos.push(g), g);
 
-    const coverC = makeCanvas(b.d * D, b.h * D);
-    drawCover(coverC.getContext("2d")!, 0, 0, coverC.width, coverC.height, b, this.fonts);
-    const spineC = makeCanvas(Math.max(8, b.t * D), b.h * D);
-    drawSpine(spineC.getContext("2d")!, 0, 0, spineC.width, spineC.height, b, this.fonts);
-    const backC = makeCanvas(256, 256);
-    drawBack(backC.getContext("2d")!, 0, 0, 256, 256, b);
-    const pagesC = makeCanvas(256, 256);
-    drawPages(pagesC.getContext("2d")!, 0, 0, 256, 256, b.id);
-    const titleC = makeCanvas((b.d - over - board) * D, (b.h - over * 2) * D);
-    drawTitlePage(titleC.getContext("2d")!, titleC.width, titleC.height, b, this.fonts);
-    const endC = makeCanvas(512, 768);
-    drawEndpaper(endC.getContext("2d")!, 512, 768, b);
+    // start with shelf-density art (a few ms to draw/upload) so the book moves
+    // on the very next frame; sharp art is swapped in once it has landed
+    const A = this.prepareArt(id, ART_FAST);
+    const [coverC, spineC, backC, pagesC, titleC, endC] = [A.cover, A.spine, A.back, A.pages, A.title, A.end];
 
     const boardM = M({ color: b.base });
-    const coverM = M({ map: T(coverC), roughness: 0.6 });
-    const spineM = M({ map: T(spineC), roughness: 0.6 });
+    const coverM = M({ map: T(coverC) });
+    const spineM = M({ map: T(spineC) });
     const backM = M({ map: T(backC) });
-    const pagesM = M({ map: T(pagesC), roughness: 0.9 });
-    const titleM = M({ map: T(titleC), roughness: 0.92 });
-    const endM = M({ map: T(endC), roughness: 0.8 });
+    const pagesM = M({ map: T(pagesC) });
+    const titleM = M({ map: T(titleC) });
+    const endM = M({ map: T(endC) });
 
     const group = new THREE.Group();
     const { t, h, d } = b;
@@ -903,12 +1183,97 @@ export class LibraryEngine {
       cover: 0,
       coverTarget: 0,
       tween: null,
+      sharp: false,
+      lw: 0,
+      maps: { cover: coverM, spine: spineM, title: titleM, end: endM },
       dispose: () => {
         tex.forEach((x) => x.dispose());
+        [coverM, spineM, titleM, endM].forEach((m) => m.map?.dispose());
         geos.forEach((x) => x.dispose());
         mats.forEach((x) => x.dispose());
       },
     };
+  }
+
+  /**
+   * On the shelf the face you look at (spine or face-out cover) faces the
+   * room's lamp. In the hand the cover faces you instead, turned and tilted, so
+   * a fixed lamp would light it differently. Rotate the hero's light rig by the
+   * same turn (blended by flight progress), so the cover in the hand receives
+   * exactly the light a face-out cover receives on the shelf.
+   */
+  private aimHeroLights(h: Hero) {
+    const coverN = new THREE.Vector3(1, 0, 0).applyQuaternion(h.group.quaternion);
+    const full = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), coverN);
+    const r = new THREE.Quaternion().slerp(full, h.lw);
+    this.hKey.position.copy(this.key.position).sub(this.key.target.position).applyQuaternion(r);
+    this.hFill.position.copy(LIGHT.fillPos).applyQuaternion(r);
+    this.hHemi.position.set(0, 1, 0).applyQuaternion(r);
+  }
+
+  /** Swap in close-up resolution art, one texture per frame, once the book is still. */
+  private sharpen(h: Hero) {
+    if (h.sharp) return;
+    h.sharp = true;
+    const A = this.prepareArt(h.id, ART_SHARP);
+    const jobs: [keyof Hero["maps"], HTMLCanvasElement][] = [
+      ["cover", A.cover],
+      ["spine", A.spine],
+      ["title", A.title],
+      ["end", A.end],
+    ];
+    const next = () => {
+      const job = jobs.shift();
+      if (!job || this.disposed || !h.group.parent) return;
+      const m = h.maps[job[0]];
+      const old = m.map;
+      m.map = this.canvasTex(job[1]);
+      old?.dispose();
+      this.heroDirty = true;
+      requestAnimationFrame(next);
+    };
+    requestAnimationFrame(next);
+  }
+
+  /**
+   * The blurred backdrop behind an open book. Instead of animating a
+   * full-screen backdrop-filter (expensive on phones, and it re-blurs every
+   * frame), grab the shelf once at 1/8 size; CSS blurs that tiny static image
+   * once and the fade is a cheap opacity change.
+   */
+  private snapshot(show: boolean) {
+    this.snapCanvas.classList.toggle("on", show);
+  }
+
+  /** Refresh the backdrop while the shelf is idle, never on the tap itself. */
+  private scheduleSnap() {
+    if (this.snapTimer) clearTimeout(this.snapTimer);
+    this.snapTimer = setTimeout(() => {
+      this.snapTimer = null;
+      if (this.disposed || this.mode !== "shelf" || this.busy || this.drag) return;
+      this.takeSnap();
+    }, 350);
+  }
+
+  private snapReady = false;
+  private takeSnap() {
+      try {
+        // render + copy in the same task, while the drawing buffer is valid
+        this.shelfR.render(this.scene, this.camera);
+        const c = this.snapCanvas;
+        const w = Math.max(16, Math.round(this.size.w / 8));
+        const h = Math.max(16, Math.round(this.size.h / 8));
+        if (c.width !== w || c.height !== h) {
+          c.width = w;
+          c.height = h;
+        }
+        const ctx = c.getContext("2d")!;
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(this.shelfCanvas, 0, 0, w, h);
+        this.snapReady = true;
+      } catch {
+        /* the veil still dims the shelf */
+      }
   }
 
   private removeHero(h: Hero) {
@@ -921,6 +1286,25 @@ export class LibraryEngine {
 
   private frame(dt: number) {
     this.time += dt;
+    if (this.mode === "shelf") {
+      if (!this.down && (Math.abs(this.fling.x) > 20 || Math.abs(this.fling.y) > 20)) {
+        this.pan(this.fling.x * dt, this.fling.y * dt);
+        const decay = Math.exp(-5 * dt);
+        this.fling.x *= decay;
+        this.fling.y *= decay;
+      }
+      // carrying a book near the top/bottom edge scrolls the shelf
+      if (this.drag && this.lastPtr) {
+        const edge = 80;
+        const { y, x } = this.lastPtr;
+        const vy = y < edge ? (edge - y) * 9 : y > this.size.h - edge ? -(y - (this.size.h - edge)) * 9 : 0;
+        const vx = x < edge ? (edge - x) * 6 : x > this.size.w - edge ? -(x - (this.size.w - edge)) * 6 : 0;
+        if (vx || vy) {
+          this.pan(vx * dt, vy * dt);
+          this.moveDrag(x, y);
+        }
+      }
+    }
     let moving = false;
     const pull = new THREE.Vector3();
     for (const s of this.books.values()) {
@@ -928,6 +1312,31 @@ export class LibraryEngine {
       pull.copy(s.tPos);
       if (this.hover === s.id && !this.drag) pull.z += 1.6;
       if (this.handled === s.id && !this.drag) pull.z += 0.8;
+      if (s.tw) {
+        const tw = s.tw;
+        tw.t = Math.min(1, tw.t + dt / tw.dur);
+        const p0 = tw.from,
+          p3 = pull;
+        // waypoints: straight out of the slot -> clear of everything -> straight in
+        const a = new THREE.Vector3(p0.x, Math.max(p0.y, tw.yc), tw.zc);
+        const c = new THREE.Vector3(p3.x, Math.max(p3.y, tw.yc), tw.zc);
+        const ph = (x: number, s0: number, s1: number) => THREE.MathUtils.smoothstep(x, s0, s1);
+        let turn = 0;
+        if (tw.t < PH_OUT) s.pos.lerpVectors(p0, a, ph(tw.t, 0, PH_OUT));
+        else if (tw.t < PH_IN) {
+          turn = ph(tw.t, PH_OUT, PH_IN);
+          s.pos.lerpVectors(a, c, turn);
+        } else {
+          turn = 1;
+          s.pos.lerpVectors(c, p3, ph(tw.t, PH_IN, 1));
+        }
+        s.quat.slerpQuaternions(tw.fromQ, s.tQuat, turn);
+        if (tw.t >= 1) s.tw = null;
+        moving = true;
+        s.mesh.position.copy(s.pos);
+        s.mesh.quaternion.copy(s.quat);
+        continue;
+      }
       const k = s.follow ? 900 : 190;
       const c = s.follow ? 2 * Math.sqrt(k) : 2 * Math.sqrt(k) * 0.78;
       // semi-implicit spring, fixed 1/240s sub-steps so a dropped frame
@@ -961,6 +1370,12 @@ export class LibraryEngine {
     if (moving || this.dirty) {
       this.shelfR.render(this.scene, this.camera);
       this.dirty = false;
+      this.wasMoving = true;
+      if (this.mode === "shelf" && !this.busy) this.snapReady = false;
+    } else if (this.wasMoving) {
+      // shelf just came to rest: refresh the blurred backdrop in the background
+      this.wasMoving = false;
+      this.scheduleSnap();
     }
     if (heroActive || this.heroDirty) {
       this.heroR.render(this.heroScene, this.camera);
@@ -970,10 +1385,12 @@ export class LibraryEngine {
 
   private stepHero(h: Hero, dt: number) {
     const g = h.group;
+    if (h === this.hero) this.aimHeroLights(h);
     if (h.tween) {
       const tw = h.tween;
       tw.t = Math.min(1, tw.t + dt / tw.dur);
-      const e = easeInOut(tw.t);
+      const e = (tw.ease ?? easeInOut)(tw.t);
+      if (tw.lw) h.lw = THREE.MathUtils.lerp(tw.lw[0], tw.lw[1], e);
       const to = tw.to();
       // cubic bezier: slide straight out of the shelf, then swing to the reader
       const p0 = tw.from.pos;
@@ -988,9 +1405,9 @@ export class LibraryEngine {
         .addScaledVector(p2, 3 * u * e * e)
         .addScaledVector(p3, e * e * e);
       // rotation lags the position a touch so the book clears its slot first
-      const rStart = tw.pullStart > 0 ? 0.12 : 0;
+      const rStart = tw.pullStart > 0 ? 0.06 : 0;
       const rEnd = tw.pullEnd > 0 ? 0.88 : 1;
-      const rt = easeInOut(THREE.MathUtils.clamp((tw.t - rStart) / (rEnd - rStart), 0, 1));
+      const rt = (tw.ease ?? easeInOut)(THREE.MathUtils.clamp((tw.t - rStart) / (rEnd - rStart), 0, 1));
       g.quaternion.slerpQuaternions(tw.from.quat, to.quat, rt);
       if (tw.t >= 1) {
         h.tween = null;
@@ -1020,6 +1437,7 @@ export class LibraryEngine {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.ro?.disconnect();
+    if (this.snapTimer) clearTimeout(this.snapTimer);
     if (this.handleTimer) clearTimeout(this.handleTimer);
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;

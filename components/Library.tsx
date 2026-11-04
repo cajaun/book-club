@@ -32,6 +32,7 @@ export default function Library() {
   const rootRef = useRef<HTMLDivElement>(null);
   const shelfRef = useRef<HTMLCanvasElement>(null);
   const heroRef = useRef<HTMLCanvasElement>(null);
+  const snapRef = useRef<HTMLCanvasElement>(null);
   const detailSlot = useRef<HTMLDivElement>(null);
   const readerSlot = useRef<HTMLDivElement>(null);
   const engineRef = useRef<LibraryEngine | null>(null);
@@ -57,8 +58,8 @@ export default function Library() {
       try {
         await Promise.all(FONT_FACES.map((f) => document.fonts.load(f)));
         const { LibraryEngine } = await import("@/lib/engine");
-        if (cancelled || !rootRef.current || !shelfRef.current || !heroRef.current) return;
-        engine = new LibraryEngine(rootRef.current, shelfRef.current, heroRef.current, FONTS, {
+        if (cancelled || !rootRef.current || !shelfRef.current || !heroRef.current || !snapRef.current) return;
+        engine = new LibraryEngine(rootRef.current, shelfRef.current, heroRef.current, snapRef.current, FONTS, {
           onHandle: (id, pose) => setHandle(id && pose ? { id, pose } : null),
           onMode: (m, id) => {
             setMode(m);
@@ -143,6 +144,7 @@ export default function Library() {
     <main className={`library mode-${mode}`} data-backend={backend}>
       <div className="stage" ref={rootRef}>
         <canvas ref={shelfRef} className="shelf-canvas" aria-hidden />
+        <canvas ref={snapRef} className="shelf-snap" aria-hidden />
         <div className="veil" aria-hidden />
         <canvas ref={heroRef} className="hero-canvas" aria-hidden />
 
