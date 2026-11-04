@@ -151,8 +151,6 @@ export class LibraryEngine {
   private hKey!: THREE.DirectionalLight;
   private hFill!: THREE.DirectionalLight;
   private art = new Map<string, HeroArt>();
-  private snapTimer: ReturnType<typeof setTimeout> | null = null;
-  private wasMoving = false;
   private size = { w: 1, h: 1 };
   private dirty = true;
   private heroDirty = false;
@@ -195,7 +193,6 @@ export class LibraryEngine {
     private root: HTMLElement,
     private shelfCanvas: HTMLCanvasElement,
     private heroCanvas: HTMLCanvasElement,
-    private snapCanvas: HTMLCanvasElement,
     private fonts: Fonts,
     private cb: EngineCallbacks,
   ) {}
@@ -728,9 +725,7 @@ export class LibraryEngine {
     this.camera.far = dist + 400;
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
-    // Sticky header: slide the crown board down by however far we've scrolled,
-    // so it always sits at the top of the screen (same wood, same light).
-    this.crownGroup.position.y = Math.min(0, v.cy + v.viewH / 2 - caseBounds().top);
+    // (the crown board scrolls with the case; nothing is pinned)
     // The header is a fixed bar pinned to the top of the screen, as tall as
     // the crown board (it covers the crown when you're at the top). It never
     // moves or resizes while scrolling, so only report it when its size changes.
@@ -1059,13 +1054,11 @@ export class LibraryEngine {
     const s = this.books.get(id);
     if (!s || s.offShelf) return;
     this.setHover(null);
-    if (!this.snapReady) this.takeSnap(); // only if tapped before the shelf ever settled
     const hero = this.makeHero(id);
     hero.group.position.copy(s.pos);
     hero.group.quaternion.copy(s.quat);
     s.inHand = true;
     this.syncVisible(s);
-    this.snapshot(true);
     this.hero = hero;
     this.mode = "detail";
     this.cb.onMode("detail", id);
@@ -1095,7 +1088,6 @@ export class LibraryEngine {
     const s = this.books.get(id)!;
     this.busy = true;
     this.mode = "shelf";
-    this.snapshot(false);
     this.cb.onMode("shelf", null);
     // Fly back to a point just in front of the slot, already square to it.
     // There the shelf's own copy of the book takes over and slides home in the
@@ -1384,47 +1376,6 @@ export class LibraryEngine {
     requestAnimationFrame(next);
   }
 
-  /**
-   * The blurred backdrop behind an open book. Instead of animating a
-   * full-screen backdrop-filter (expensive on phones, and it re-blurs every
-   * frame), grab the shelf once at 1/8 size; CSS blurs that tiny static image
-   * once and the fade is a cheap opacity change.
-   */
-  private snapshot(show: boolean) {
-    this.snapCanvas.classList.toggle("on", show);
-  }
-
-  /** Refresh the backdrop while the shelf is idle, never on the tap itself. */
-  private scheduleSnap() {
-    if (this.snapTimer) clearTimeout(this.snapTimer);
-    this.snapTimer = setTimeout(() => {
-      this.snapTimer = null;
-      if (this.disposed || this.mode !== "shelf" || this.busy || this.drag) return;
-      this.takeSnap();
-    }, 350);
-  }
-
-  private snapReady = false;
-  private takeSnap() {
-      try {
-        // render + copy in the same task, while the drawing buffer is valid
-        this.shelfR.render(this.scene, this.camera);
-        const c = this.snapCanvas;
-        const w = Math.max(16, Math.round(this.size.w / 8));
-        const h = Math.max(16, Math.round(this.size.h / 8));
-        if (c.width !== w || c.height !== h) {
-          c.width = w;
-          c.height = h;
-        }
-        const ctx = c.getContext("2d")!;
-        ctx.clearRect(0, 0, w, h);
-        ctx.drawImage(this.shelfCanvas, 0, 0, w, h);
-        this.snapReady = true;
-      } catch {
-        /* the veil still dims the shelf */
-      }
-  }
-
   private removeHero(h: Hero) {
     this.heroScene.remove(h.group);
     h.dispose();
@@ -1519,12 +1470,6 @@ export class LibraryEngine {
     if (moving || this.dirty) {
       this.shelfR.render(this.scene, this.camera);
       this.dirty = false;
-      this.wasMoving = true;
-      if (this.mode === "shelf" && !this.busy) this.snapReady = false;
-    } else if (this.wasMoving) {
-      // shelf just came to rest: refresh the blurred backdrop in the background
-      this.wasMoving = false;
-      this.scheduleSnap();
     }
     if (heroActive || this.heroDirty) {
       this.heroR.render(this.heroScene, this.camera);
@@ -1586,7 +1531,6 @@ export class LibraryEngine {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.ro?.disconnect();
-    if (this.snapTimer) clearTimeout(this.snapTimer);
     if (this.handleTimer) clearTimeout(this.handleTimer);
     this.scene.traverse((o) => {
       const m = o as THREE.Mesh;

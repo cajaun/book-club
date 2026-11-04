@@ -32,7 +32,6 @@ export default function Library() {
   const rootRef = useRef<HTMLDivElement>(null);
   const shelfRef = useRef<HTMLCanvasElement>(null);
   const heroRef = useRef<HTMLCanvasElement>(null);
-  const snapRef = useRef<HTMLCanvasElement>(null);
   const detailSlot = useRef<HTMLDivElement>(null);
   const readerSlot = useRef<HTMLDivElement>(null);
   const engineRef = useRef<LibraryEngine | null>(null);
@@ -58,8 +57,8 @@ export default function Library() {
       try {
         await Promise.all(FONT_FACES.map((f) => document.fonts.load(f)));
         const { LibraryEngine } = await import("@/lib/engine");
-        if (cancelled || !rootRef.current || !shelfRef.current || !heroRef.current || !snapRef.current) return;
-        engine = new LibraryEngine(rootRef.current, shelfRef.current, heroRef.current, snapRef.current, FONTS, {
+        if (cancelled || !rootRef.current || !shelfRef.current || !heroRef.current) return;
+        engine = new LibraryEngine(rootRef.current, shelfRef.current, heroRef.current, FONTS, {
           onHandle: (id, pose) => setHandle(id && pose ? { id, pose } : null),
           onMode: (m, id) => {
             setMode(m);
@@ -154,22 +153,12 @@ export default function Library() {
     <main className={`library mode-${mode}`} data-backend={backend}>
       <div className="stage" ref={rootRef}>
         <canvas ref={shelfRef} className="shelf-canvas" aria-hidden />
-        <canvas ref={snapRef} className="shelf-snap" aria-hidden />
         <div className="veil" aria-hidden />
         <canvas ref={heroRef} className="hero-canvas" aria-hidden />
 
-        {/* crown: logo, or the pose control while a book is in hand */}
+        {/* over the crown board: the pose control, only while a book is in hand */}
         <header className={`crown ${handle && mode === "shelf" ? "is-handling" : ""}`} style={headerStyle}>
           <div className="crown-inner">
-          <div className="crown-logo">
-            <button className="brass" aria-label="Search the shelves" onClick={() => setSearchOpen(true)}>
-              <SearchIcon />
-            </button>
-            <div className="wordmark">
-              <h1>GK Book Club</h1>
-            </div>
-            <span className="brass-spacer" aria-hidden />
-          </div>
           <div className="crown-pose" aria-hidden={!handle}>
             <div className="segmented" role="radiogroup" aria-label="How the book sits">
               {POSES.map((p) => (
@@ -306,11 +295,3 @@ function Fallback({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-      <circle cx="10.5" cy="10.5" r="6" />
-      <path d="M15 15l5 5" />
-    </svg>
-  );
-}

@@ -37,13 +37,11 @@ button:focus-visible { outline: 2px solid var(--gold-hi); outline-offset: 3px; }
 .shelf-canvas, .hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hero-canvas { pointer-events: none; z-index: 5; }
 
-.shelf-snap {
-  position: absolute; left: -6%; top: -6%; width: 112%; height: 112%;
-  z-index: 2; pointer-events: none; opacity: 0;
-  filter: blur(12px) saturate(.95);
-  transition: opacity .28s ease;
-}
-.shelf-snap.on { opacity: 1; }
+/* Behind an open book the shelf itself is blurred: the live canvas, as you
+   left it. It doesn't re-render while a book is open, so the browser blurs one
+   still image; only the short fade re-blurs. */
+.shelf-canvas { transition: filter .35s ease; }
+.mode-detail .shelf-canvas, .mode-reader .shelf-canvas { filter: blur(10px); }
 .veil {
   position: absolute; inset: 0; z-index: 2; pointer-events: none;
   background: rgba(24, 14, 8, 0);
